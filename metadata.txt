@@ -1,7 +1,8 @@
 [general]
 name=Layer Order Plus
 qgisMinimumVersion=3.16
-description=Kinda like Layer Order panel, but with grouping
+description=Kinda like Layer Order panel, but with grouping.
+about=You can create groups of layers and delete them. Layer order in this panel will be the same at the Layer Order panel. 
 version=1.0.0
 author=Samuel Kultz (Kultz Engenharia)
 email=samkultz@me.com
@@ -15,7 +16,7 @@ hasProcessingProvider=no
 experimental=True
 deprecated=False
 server=False
-changelog=0.1.0
+changelog=1.0.0
   - Initial release
-  - Auto-move new layers into selected group
-  - Insert above selected layer
+  - Shouldn´t have problems upon qgis starting.
+  - Visibility, like in Layer Order, not yet implemented.Z
