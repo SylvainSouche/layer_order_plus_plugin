@@ -14,17 +14,17 @@ class BetterLayerOrderPlugin(QObject):
         self.dock = None
 
     def initGui(self):
-        self.action = QAction("Better Layer Order", self.iface.mainWindow())
+        self.action = QAction("Layer Order Plus", self.iface.mainWindow())
         self.action.setCheckable(True)
         self.action.setChecked(True)
         self.action.toggled.connect(self._toggle_dock)
-        self.iface.addPluginToMenu("Better Layer Order", self.action)
+        self.iface.addPluginToMenu("Layer Order Plus", self.action)
 
         self.dock = BetterLayerOrderDock(self.iface)
         self.dock.set_save_callback(self._save_tree_json)
         self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.dock)
 
-        # block apply + block autosave until project is fully read
+        # block apply + autosave until project is fully read
         self.dock.set_apply_suspended(True)
 
         # project lifecycle hooks
@@ -59,13 +59,12 @@ class BetterLayerOrderPlugin(QObject):
             pass
 
         if self.dock:
-            # persist last state
             self._save_tree_json(self.dock._serialize_tree())
             self.dock.deleteLater()
             self.dock = None
 
         if self.action:
-            self.iface.removePluginMenu("Better Layer Order", self.action)
+            self.iface.removePluginMenu("Layer Order Plus", self.action)
             self.action.deleteLater()
             self.action = None
 
@@ -76,19 +75,17 @@ class BetterLayerOrderPlugin(QObject):
                 self.dock.raise_()
 
     def _on_project_cleared(self):
-        # project is about to be read/opened
         if self.dock:
             self.dock.set_apply_suspended(True)
-            self.dock.clear_tree_ui()  # optional but prevents showing stale tree
+            self.dock.clear_tree_ui()
 
     def _on_project_read(self):
-        # project finished reading: now layers exist -> safe to rebuild tree
         if not self.dock:
             return
 
-        self.dock.set_apply_suspended(True)          # keep blocked while rebuilding
+        self.dock.set_apply_suspended(True)
         self.dock.load_from_project(self._load_tree_json())
-        self.dock.set_apply_suspended(False)         # allow apply + autosave
+        self.dock.set_apply_suspended(False)
         self.dock.request_apply()
 
     def _load_tree_json(self):

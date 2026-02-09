@@ -1,16 +1,15 @@
 [general]
-name=Better Layer Order
+name=Layer Order Plus
 qgisMinimumVersion=3.16
-description=Auto-place newly added layers into the currently selected group and order position.
-about=When you add new layers, this plugin moves them into the currently selected group (or the selected layer's group) and inserts them just above the selected layer. If a group is selected, new layers go to the top of that group. If nothing is selected, QGIS default behavior is kept.
-version=0.1.0
+description=Kinda like Layer Order panel, but with grouping
+version=1.0.0
 author=Samuel Kultz (Kultz Engenharia)
 email=samkultz@me.com
 category=Productivity
 tags=layers,layer tree,order,groups,workflow,productivity
-homepage=https://github.com/samkultz/better_layer_order
-repository=https://github.com/samkultz/better_layer_order
-tracker=https://github.com/samkultz/better_layer_order/issues
+homepage=https://github.com/samkultz/layer_order_plus_plugin
+repository=https://github.com/samkultz/layer_order_plus_plugin
+tracker=https://github.com/samkultz/layer_order_plus_plugin/issues
 icon=icon.png
 hasProcessingProvider=no
 experimental=True
