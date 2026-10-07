@@ -1,13 +1,22 @@
 # dock.py
-"""Layer Order Plus dock widget.
+"""Layer Order Plus dock widget (MVC — View + ViewController, 1.2.0 refactor).
 
-This module owns the BetterLayerOrderDock class and the orchestration logic
-(apply state machine, undo wiring, signal handling, project I/O). Pure tree
-helpers live in tree_utils.py; icon helpers in icons.py; the BetterLayerTree
-QTreeWidget subclass in tree_widget.py; the TreeStateCommand in undo.py.
+The dock is now a thin View + ViewController over the LayerOrderModel
+(model.py). Every state mutation goes through the Model; the dock listens
+to Model events and updates the QTreeWidget incrementally. The QTreeWidget
+is a shadow of the Model — rebuilt on `model_loaded`, updated per-event
+otherwise.
+
+The Model is Qt-free and fully unit-tested (tests/test_model.py, 76 tests).
+The dock's job is: UI construction, QGIS signal handling (Controller aspect),
+QTreeWidget ↔ Model sync (ViewController aspect), undo stack wiring, and
+the apply-to-QGIS state machine.
+
+Undo is still snapshot-based (TreeStateCommand) — snapshots come from
+`self._model.serialize()`. The undo stack itself will move to a separate
+Controller in 1.4.0.
 """
 import json
-import os
 import traceback
 
 from qgis.PyQt.QtCore import Qt, QTimer, QSize
@@ -61,14 +70,29 @@ from .icons import (
 )
 from .tree_widget import BetterLayerTree
 from .undo import TreeStateCommand
+from .model import (
+    LayerOrderModel,
+    GroupNode,
+    LayerNode,
+    EVENT_MODEL_LOADED,
+    EVENT_LAYER_ADDED,
+    EVENT_LAYER_REMOVED,
+    EVENT_LAYER_RENAMED,
+    EVENT_GROUP_CREATED,
+    EVENT_GROUP_DELETED,
+    EVENT_GROUP_RENAMED,
+    EVENT_ITEM_MOVED,
+    EVENT_VISIBILITY_CHANGED,
+    EVENT_EXPANDED_CHANGED,
+    EVENT_ORDER_CHANGED,
+)
 
 
 LOG_TAG = "LayerOrderPlus"
 
-# Persistence format version (QualityOverhaul 2.4).
-# v1: initial schema — children list, groups carry name/id/expanded/children,
-#     layers carry id. Older saved trees (no "version" field) are treated as v1.
-TREE_JSON_SCHEMA_VERSION = 1
+# Persistence format version (QualityOverhaul 2.4) — re-exported from the Model
+# so existing imports keep working.
+from .model import TREE_JSON_SCHEMA_VERSION  # noqa: E402
 
 
 def _log(msg, level=Qgis.Info):
@@ -76,7 +100,6 @@ def _log(msg, level=Qgis.Info):
     try:
         QgsMessageLog.logMessage(str(msg), LOG_TAG, level)
     except Exception:
-        # If QgsMessageLog itself fails (very early load), fall back to print.
         try:
             print(f"[{LOG_TAG}] {msg}")
         except Exception:
@@ -98,16 +121,34 @@ _icon_remove_group = icon_remove_group
 _icon_rename_group = icon_rename_group
 _icon_for_layer = icon_for_layer
 
+
 class BetterLayerOrderDock(QDockWidget):
+    """View + ViewController over LayerOrderModel.
+
+    The Model is the single source of truth for the order tree. The dock:
+    - Builds the QTreeWidget UI (View)
+    - Listens to Model events and updates the QTreeWidget (ViewController)
+    - Routes user actions (button clicks, drag-drop, context menu) to Model
+      mutations (ViewController)
+    - Listens to QGIS signals (layersAdded, layersWillBeRemoved) and routes
+      them to Model mutations (Controller aspect — will split in 1.4.0)
+    - Owns the undo stack and the apply-to-QGIS state machine
+    """
+
     def __init__(self, iface):
         super().__init__("Layer Order Plus", iface.mainWindow())
         self.iface = iface
         self._save_cb = None
 
+        # ---------------- Model (single source of truth) ----------------
+        self._model = LayerOrderModel()
+        self._model.add_listener(self._on_model_event)
+
         # ---------------- guards ----------------
         self._apply_suspended = True     # block apply during project load
         self._loading = False            # block autosave while building UI
         self._in_undo = False
+        self._syncing_from_model = False  # block Model emits when we're the source
 
         # ---------------- persistent anchor ----------------
         self._anchor_type = None         # TYPE_LAYER | TYPE_GROUP
@@ -118,19 +159,10 @@ class BetterLayerOrderDock(QDockWidget):
         self.undo_stack = QUndoStack(self)
 
         # ---------------- layer rename sync (QualityOverhaul 2.1) ----------------
-        # Map layer_id → (QTreeWidgetItem, layer) so we can update the tree label
-        # when the user renames a layer in the Layers panel.
-        # We use the layer's nameChanged signal; connections are stored so we can
-        # disconnect on unload / layer removal.
         self._layer_rename_connections = {}  # layer_id → (layer, bound_slot)
 
         # ---------------- visibility checkbox sync (QualityOverhaul 3.1) ----------------
-        # When True, itemChanged handlers ignore check-state changes (we are the
-        # source, so we don't need to propagate back to the layer tree).
         self._in_visibility_sync = False
-        # Per-layer visibilityChanged connections: layer_id → (layer_tree_layer, slot)
-        # We listen on QgsLayerTreeLayer (not QgsMapLayer) because that's where
-        # the Layers panel toggles.
         self._visibility_connections = {}
 
         # safe apply debounce
@@ -139,9 +171,23 @@ class BetterLayerOrderDock(QDockWidget):
         self._apply_timer.timeout.connect(self._apply_now)
 
         # ---------------- UI ----------------
+        self._build_ui()
+        self._connect_signals()
+
+        self._update_group_actions_enabled()
+        self._sync_control_from_project()
+        self._sync_remove_empty_from_project()
+
+        _log(f"dock initialised; chk_control exists={hasattr(self, 'chk_control')}; "
+             f"is_control_enabled={self.is_control_enabled()}; "
+             f"remove_empty_groups={self._model.get_remove_empty_groups()}")
+
+    # ==================================================================
+    # UI construction
+    # ==================================================================
+    def _build_ui(self):
         rootw = QWidget()
         self.setWidget(rootw)
-
         lay = QVBoxLayout(rootw)
         head = QHBoxLayout()
         lay.addLayout(head)
@@ -164,9 +210,7 @@ class BetterLayerOrderDock(QDockWidget):
         head.addWidget(self.btn_del_group)
         head.addStretch(1)
 
-        # QualityOverhaul 3.3: case-insensitive name substring filter.
-        # Hidden items stay in the tree (just not visible); clearing the
-        # field restores the full tree.
+        # Filter field (QualityOverhaul 3.3)
         self.ed_filter = QLineEdit()
         self.ed_filter.setPlaceholderText("Filter by name…")
         self.ed_filter.setClearButtonEnabled(True)
@@ -178,7 +222,6 @@ class BetterLayerOrderDock(QDockWidget):
 
         self.tree = BetterLayerTree()
         self.tree.setHeaderHidden(True)
-        # QualityOverhaul 3.5: explain drop rules to the user.
         self.tree.setToolTip(
             "Drag layers and groups to set draw order (top of tree = drawn on top).\n\n"
             "Drop rules:\n"
@@ -209,8 +252,6 @@ class BetterLayerOrderDock(QDockWidget):
         )
         lay.addWidget(self.chk_control)
 
-        # QualityOverhaul 2.2: optional cleanup of empty groups after layer remove.
-        # Persisted per-project via QgsProject entry "removeEmptyGroups" (default: True).
         self.chk_remove_empty = QCheckBox("Remove empty groups on layer delete")
         self.chk_remove_empty.setToolTip(
             "When checked, order groups that become empty after their last layer is "
@@ -218,7 +259,7 @@ class BetterLayerOrderDock(QDockWidget):
         )
         lay.addWidget(self.chk_remove_empty)
 
-        # Local shortcuts when the dock has focus (plugin also hooks Edit menu / app shortcuts)
+        # Local shortcuts (plugin also hooks Edit menu / app shortcuts)
         for seq, slot in (
             (QKeySequence.StandardKey.Undo, self.undo_stack.undo),
             (QKeySequence.StandardKey.Redo, self.undo_stack.redo),
@@ -228,6 +269,7 @@ class BetterLayerOrderDock(QDockWidget):
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             sc.activated.connect(slot)
 
+    def _connect_signals(self):
         # tree callbacks
         self.tree.set_state_provider(self._serialize_tree)
         self.tree.set_after_drop_callback(self._on_tree_changed_external)
@@ -242,23 +284,291 @@ class BetterLayerOrderDock(QDockWidget):
         self.tree.model().rowsMoved.connect(self._on_rows_moved)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
-        # QualityOverhaul 3.1: visibility checkbox propagation
         self.tree.itemChanged.connect(self._on_tree_item_changed)
 
-        # anchor capture + toolbar enable state
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
         self.tree.currentItemChanged.connect(self._capture_anchor_from_current)
 
-        self._update_group_actions_enabled()
-        self._sync_control_from_project()
-        self._sync_remove_empty_from_project()
-
-        _log(f"dock initialised; chk_control exists={hasattr(self, 'chk_control')}; "
-             f"is_control_enabled={self.is_control_enabled()}; "
-             f"remove_empty_groups={self._should_remove_empty_groups()}")
+    # ==================================================================
+    # Busy-state property (consolidates the 3-guard pattern)
+    # ==================================================================
+    @property
+    def _is_busy(self) -> bool:
+        """True when mutations should be no-ops (loading / undo / syncing)."""
+        return self._loading or self._in_undo or self._syncing_from_model
 
     # ==================================================================
-    # control rendering order (stock Layer Order parity)
+    # Model event dispatcher (ViewController: Model → QTreeWidget)
+    # ==================================================================
+    def _on_model_event(self, event_type: str, payload: dict):
+        """Route Model events to QTreeWidget updates.
+
+        This is the heart of the ViewController. Every Model mutation emits
+        an event; this dispatcher updates the QTreeWidget to match.
+
+        During `block_notifications()` (project load, undo replay) the Model
+        suppresses per-node events and emits a single `model_loaded` —
+        we then rebuild the QTreeWidget from scratch.
+        """
+        if event_type == EVENT_MODEL_LOADED:
+            self._rebuild_tree_from_model()
+        elif event_type == EVENT_LAYER_ADDED:
+            self._on_model_layer_added(payload)
+        elif event_type == EVENT_LAYER_REMOVED:
+            self._on_model_layer_removed(payload)
+        elif event_type == EVENT_LAYER_RENAMED:
+            self._on_model_layer_renamed(payload)
+        elif event_type == EVENT_GROUP_CREATED:
+            self._on_model_group_created(payload)
+        elif event_type == EVENT_GROUP_DELETED:
+            self._on_model_group_deleted(payload)
+        elif event_type == EVENT_GROUP_RENAMED:
+            self._on_model_group_renamed(payload)
+        elif event_type == EVENT_ITEM_MOVED:
+            self._on_model_item_moved(payload)
+        elif event_type == EVENT_VISIBILITY_CHANGED:
+            self._on_model_visibility_changed(payload)
+        elif event_type == EVENT_EXPANDED_CHANGED:
+            self._on_model_expanded_changed(payload)
+        elif event_type == EVENT_ORDER_CHANGED:
+            # Coarse signal — Controller aspect applies to QGIS.
+            # The actual apply is debounced via request_apply().
+            self.request_apply()
+
+    def _rebuild_tree_from_model(self):
+        """Full QTreeWidget rebuild from the Model. Used on model_loaded."""
+        self._syncing_from_model = True
+        self.tree.blockSignals(True)
+        try:
+            self.tree.clear()
+            for node in self._model.get_root():
+                self._build_tree_item(node, None)
+            # Restore expanded state for groups
+            self._restore_expanded_state(self._model.get_root())
+        finally:
+            self.tree.blockSignals(False)
+            self._syncing_from_model = False
+
+    def _build_tree_item(self, node, parent_item):
+        """Recursively build a QTreeWidgetItem from a Model node."""
+        if isinstance(node, GroupNode):
+            it = QTreeWidgetItem([node.name])
+            it.setData(0, ROLE_TYPE, TYPE_GROUP)
+            it.setData(0, ROLE_ID, node.id)
+            try:
+                it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
+                            & ~Qt.ItemFlag.ItemIsEditable)
+            except Exception:
+                it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                            & ~Qt.ItemFlag.ItemIsEditable)
+            it.setIcon(0, icon_group())
+            it.setCheckState(0, Qt.CheckState.Checked)  # auto-tristate recomputes
+            if parent_item is None:
+                self.tree.addTopLevelItem(it)
+            else:
+                parent_item.addChild(it)
+            for ch in node.children:
+                self._build_tree_item(ch, it)
+        else:  # LayerNode
+            lyr = self._lookup_qgs_layer(node.id)
+            it = QTreeWidgetItem([node.name])
+            it.setData(0, ROLE_TYPE, TYPE_LAYER)
+            it.setData(0, ROLE_ID, node.id)
+            it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
+            if lyr is not None:
+                it.setIcon(0, icon_for_layer(lyr))
+            it.setCheckState(0, Qt.CheckState.Checked if node.visible else Qt.CheckState.Unchecked)
+            if parent_item is None:
+                self.tree.addTopLevelItem(it)
+            else:
+                parent_item.addChild(it)
+            # Connect rename + visibility listeners
+            if lyr is not None:
+                self._connect_layer_rename(lyr)
+                self._connect_layer_visibility(lyr)
+
+    def _restore_expanded_state(self, nodes, parent_item=None):
+        """Walk the Model tree and restore expanded state on QTreeWidget items."""
+        for node in nodes:
+            if isinstance(node, GroupNode):
+                it = find_group_item(self.tree, node.id)
+                if it is not None:
+                    try:
+                        it.setExpanded(node.expanded)
+                    except RuntimeError:
+                        pass
+                self._restore_expanded_state(node.children, it)
+
+    # ---------- per-event handlers ----------
+
+    def _on_model_layer_added(self, payload):
+        """Model added a layer — create the QTreeWidget item."""
+        self._syncing_from_model = True
+        self.tree.blockSignals(True)
+        try:
+            lyr = self._lookup_qgs_layer(payload["layer_id"])
+            if lyr is None:
+                _log(f"_on_model_layer_added: layer {payload['layer_id']} not found in project", Qgis.Warning)
+                return
+            it = QTreeWidgetItem([payload["name"]])
+            it.setData(0, ROLE_TYPE, TYPE_LAYER)
+            it.setData(0, ROLE_ID, payload["layer_id"])
+            it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
+            it.setIcon(0, icon_for_layer(lyr))
+            it.setCheckState(0, Qt.CheckState.Checked if payload.get("visible", True) else Qt.CheckState.Unchecked)
+            parent_id = payload.get("parent_id")
+            if parent_id:
+                parent_item = find_group_item(self.tree, parent_id)
+                if parent_item is not None:
+                    parent_item.insertChild(payload["index"], it)
+                else:
+                    self.tree.insertTopLevelItem(payload["index"], it)
+            else:
+                self.tree.insertTopLevelItem(payload["index"], it)
+            self._connect_layer_rename(lyr)
+            self._connect_layer_visibility(lyr)
+        finally:
+            self.tree.blockSignals(False)
+            self._syncing_from_model = False
+
+    def _on_model_layer_removed(self, payload):
+        """Model removed a layer — remove the QTreeWidget item."""
+        self._syncing_from_model = True
+        self.tree.blockSignals(True)
+        try:
+            it = find_layer_item(self.tree, payload["layer_id"])
+            if it is not None:
+                p = it.parent()
+                if p is None:
+                    idx = self.tree.indexOfTopLevelItem(it)
+                    if idx >= 0:
+                        self.tree.takeTopLevelItem(idx)
+                else:
+                    p.takeChild(p.indexOfChild(it))
+            self._disconnect_layer_rename(payload["layer_id"])
+            self._disconnect_layer_visibility(payload["layer_id"])
+        finally:
+            self.tree.blockSignals(False)
+            self._syncing_from_model = False
+
+    def _on_model_layer_renamed(self, payload):
+        """Model renamed a layer — update the QTreeWidget item text."""
+        it = find_layer_item(self.tree, payload["layer_id"])
+        if it is not None:
+            try:
+                self._syncing_from_model = True
+                it.setText(0, payload["new_name"])
+            finally:
+                self._syncing_from_model = False
+
+    def _on_model_group_created(self, payload):
+        """Model created a group — create the QTreeWidget item."""
+        self._syncing_from_model = True
+        self.tree.blockSignals(True)
+        try:
+            it = QTreeWidgetItem([payload["name"]])
+            it.setData(0, ROLE_TYPE, TYPE_GROUP)
+            it.setData(0, ROLE_ID, payload["group_id"])
+            try:
+                it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
+                            & ~Qt.ItemFlag.ItemIsEditable)
+            except Exception:
+                it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                            & ~Qt.ItemFlag.ItemIsEditable)
+            it.setIcon(0, icon_group())
+            it.setCheckState(0, Qt.CheckState.Checked)
+            parent_id = payload.get("parent_id")
+            if parent_id:
+                parent_item = find_group_item(self.tree, parent_id)
+                if parent_item is not None:
+                    parent_item.insertChild(payload["index"], it)
+                else:
+                    self.tree.insertTopLevelItem(payload["index"], it)
+            else:
+                self.tree.insertTopLevelItem(payload["index"], it)
+        finally:
+            self.tree.blockSignals(False)
+            self._syncing_from_model = False
+
+    def _on_model_group_deleted(self, payload):
+        """Model deleted a group — remove the QTreeWidget item.
+
+        If unwrap_children was used, the children were already promoted
+        in the Model; we need to remove the group item and re-create the
+        children at their new positions. Simplest: rebuild from Model.
+        """
+        if payload.get("unwrapped_children"):
+            # Children were promoted — rebuild to get correct positions
+            self._rebuild_tree_from_model()
+        else:
+            # Just remove the group item
+            self._syncing_from_model = True
+            self.tree.blockSignals(True)
+            try:
+                it = find_group_item(self.tree, payload["group_id"])
+                if it is not None:
+                    p = it.parent()
+                    if p is None:
+                        idx = self.tree.indexOfTopLevelItem(it)
+                        if idx >= 0:
+                            self.tree.takeTopLevelItem(idx)
+                    else:
+                        p.takeChild(p.indexOfChild(it))
+            finally:
+                self.tree.blockSignals(False)
+                self._syncing_from_model = False
+
+    def _on_model_group_renamed(self, payload):
+        """Model renamed a group — update the QTreeWidget item text."""
+        it = find_group_item(self.tree, payload["group_id"])
+        if it is not None:
+            try:
+                self._syncing_from_model = True
+                it.setText(0, payload["new_name"])
+            finally:
+                self._syncing_from_model = False
+
+    def _on_model_item_moved(self, payload):
+        """Model moved an item — rebuild QTreeWidget to get correct positions.
+
+        Moving items in QTreeWidget while preserving selection and expanded
+        state is fiddly; a full rebuild is simpler and correct. For large
+        trees this could be optimized to a targeted take/insert.
+        """
+        self._rebuild_tree_from_model()
+
+    def _on_model_visibility_changed(self, payload):
+        """Model changed a layer's visibility — update the QTreeWidget checkbox."""
+        it = find_layer_item(self.tree, payload["layer_id"])
+        if it is not None:
+            try:
+                self._syncing_from_model = True
+                it.setCheckState(0, Qt.CheckState.Checked if payload["visible"] else Qt.CheckState.Unchecked)
+            finally:
+                self._syncing_from_model = False
+
+    def _on_model_expanded_changed(self, payload):
+        """Model changed a group's expanded state — update the QTreeWidget item."""
+        it = find_group_item(self.tree, payload["group_id"])
+        if it is not None:
+            try:
+                self._syncing_from_model = True
+                it.setExpanded(payload["expanded"])
+            finally:
+                self._syncing_from_model = False
+
+    # ==================================================================
+    # QGIS layer lookup (Controller aspect)
+    # ==================================================================
+    def _lookup_qgs_layer(self, layer_id):
+        """Return the QgsMapLayer for an id, or None."""
+        try:
+            return QgsProject.instance().mapLayer(layer_id)
+        except Exception:
+            return None
+
+    # ==================================================================
+    # Control rendering order (stock Layer Order parity)
     # ==================================================================
     def is_control_enabled(self) -> bool:
         return bool(self.chk_control.isChecked())
@@ -290,21 +600,16 @@ class BetterLayerOrderDock(QDockWidget):
     def _apply_control_ui_state(self, enabled: bool):
         self.tree.setEnabled(enabled)
         self.btn_add_group.setEnabled(enabled)
-        # Filter box also follows control state — filtering an inactive tree
-        # is meaningless.
         self.ed_filter.setEnabled(enabled)
         if enabled:
             self._update_group_actions_enabled()
         else:
             self.btn_rename_group.setEnabled(False)
             self.btn_del_group.setEnabled(False)
-            # Clear filter so the tree is fully visible when re-enabled
             self.ed_filter.blockSignals(True)
             self.ed_filter.clear()
             self.ed_filter.blockSignals(False)
         self.tree.setStyleSheet("" if enabled else "QTreeWidget { color: palette(disabled); }")
-        # The empty-group cleanup checkbox follows control state — meaningless
-        # when the panel is not driving order.
         self.chk_remove_empty.setEnabled(enabled)
 
     # ==================================================================
@@ -313,6 +618,7 @@ class BetterLayerOrderDock(QDockWidget):
     def _on_remove_empty_toggled(self, checked: bool):
         if self._loading:
             return
+        self._model.set_remove_empty_groups(bool(checked))
         try:
             QgsProject.instance().writeEntry("BetterLayerOrder", "removeEmptyGroups", bool(checked))
             QgsProject.instance().setDirty(True)
@@ -327,33 +633,20 @@ class BetterLayerOrderDock(QDockWidget):
             checked = bool(int(val)) if ok and val not in ("", None) else True
         except Exception:
             checked = True
+        self._model.set_remove_empty_groups(checked)
         self.chk_remove_empty.blockSignals(True)
         self.chk_remove_empty.setChecked(checked)
         self.chk_remove_empty.blockSignals(False)
 
-    def _should_remove_empty_groups(self) -> bool:
-        return bool(self.chk_remove_empty.isChecked())
-
     # ==================================================================
-    # name filter (QualityOverhaul 3.3)
+    # name filter (QualityOverhaul 3.3) — pure View concern
     # ==================================================================
     def _on_filter_changed(self, text: str):
-        """Case-insensitive substring filter — delegates to tree_utils.apply_name_filter."""
         self.tree.blockSignals(True)
         try:
             apply_name_filter(self.tree, text)
         finally:
             self.tree.blockSignals(False)
-
-    def _prune_empty_groups(self):
-        """Remove empty groups from the tree. Returns count removed.
-
-        Delegates to tree_utils.prune_empty_groups (QualityOverhaul 4.2 dedup).
-        """
-        removed = prune_empty_groups(self.tree)
-        if removed:
-            _log(f"_prune_empty_groups: removed {removed} empty group(s)")
-        return removed
 
     # ==================================================================
     # external control
@@ -369,11 +662,10 @@ class BetterLayerOrderDock(QDockWidget):
     def clear_tree_ui(self):
         self._loading = True
         self.tree.blockSignals(True)
-        # Drop rename + visibility listeners — tree is being wiped.
         self._disconnect_all_layer_renames()
         self._disconnect_all_layer_visibilities()
         try:
-            self.tree.clear()
+            self._model.clear()
             self._snapshot = ""
             self._anchor_type = None
             self._anchor_id = None
@@ -406,14 +698,13 @@ class BetterLayerOrderDock(QDockWidget):
 
     def _resolve_anchor_item(self):
         if self._anchor_type == TYPE_LAYER and self._anchor_id:
-            it = self.find_layer_item(self._anchor_id)
+            it = find_layer_item(self.tree, self._anchor_id)
             if it:
                 return it
         if self._anchor_type == TYPE_GROUP and self._anchor_id:
-            it = self.find_group_item(self._anchor_id)
+            it = find_group_item(self.tree, self._anchor_id)
             if it:
                 return it
-
         it = self.tree.currentItem()
         if it:
             return it
@@ -422,94 +713,40 @@ class BetterLayerOrderDock(QDockWidget):
             return sel[0]
         return None
 
+    # ==================================================================
+    # tree helpers (thin wrappers — kept for backwards compat)
+    # ==================================================================
     def find_layer_item(self, layer_id):
-        """Delegates to tree_utils.find_layer_item (QualityOverhaul 4.2 dedup)."""
         return find_layer_item(self.tree, layer_id)
 
     def find_group_item(self, group_id):
-        """Delegates to tree_utils.find_group_item (QualityOverhaul 4.2 dedup)."""
         return find_group_item(self.tree, group_id)
 
-        for i in range(self.tree.topLevelItemCount()):
-            r = walk(self.tree.topLevelItem(i))
-            if r:
-                return r
-        return None
-
-    # ==================================================================
-    # tree helpers
-    # ==================================================================
     def _index_in_parent(self, item: QTreeWidgetItem) -> int:
-        """Delegates to tree_utils.index_in_parent (QualityOverhaul 4.2 dedup)."""
         return index_in_parent(self.tree, item)
 
     def iter_all_layer_ids(self):
-        """Yield every layer id in the tree. Delegates to tree_utils."""
         yield from iter_all_layer_ids(self.tree)
 
     def _flatten_to_qgs_layers(self):
+        """Flatten the Model tree to a list of QgsMapLayer (for setCustomLayerOrder)."""
         proj = QgsProject.instance()
         out = []
-
-        def walk(it):
-            t = it.data(0, ROLE_TYPE)
-            if t == TYPE_LAYER:
-                lyr = proj.mapLayer(it.data(0, ROLE_ID))
-                if lyr:
-                    out.append(lyr)
-                return
-            for i in range(it.childCount()):
-                walk(it.child(i))
-
-        for i in range(self.tree.topLevelItemCount()):
-            walk(self.tree.topLevelItem(i))
-
+        for layer_id in self._model.get_flattened_layer_ids():
+            lyr = proj.mapLayer(layer_id)
+            if lyr:
+                out.append(lyr)
         return out
 
-    def _make_layer_item(self, lyr) -> QTreeWidgetItem:
-        """Build a layer QTreeWidgetItem (QualityOverhaul 4.2 dedup).
-
-        Shared by _add_layer_item (append) and _insert_layer_item (insert at idx).
-        """
-        it = QTreeWidgetItem([lyr.name()])
-        it.setData(0, ROLE_TYPE, TYPE_LAYER)
-        it.setData(0, ROLE_ID, lyr.id())
-        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-        it.setIcon(0, icon_for_layer(lyr))
-        # QualityOverhaul 3.1: initial visibility from the layer tree.
-        self._set_layer_item_check_state(it, lyr)
-        self._connect_layer_rename(lyr)
-        self._connect_layer_visibility(lyr)
-        return it
-
-    def _add_layer_item(self, parent, lyr):
-        """Append a layer item to `parent` (or top-level if parent is None)."""
-        it = self._make_layer_item(lyr)
-        if parent is None:
-            self.tree.addTopLevelItem(it)
-        else:
-            parent.addChild(it)
-        return it
-
-    def _insert_layer_item(self, parent, idx, lyr):
-        """Insert a layer item at `idx` under `parent` (or top-level if None)."""
-        it = self._make_layer_item(lyr)
-        if parent is None:
-            self.tree.insertTopLevelItem(idx, it)
-        else:
-            parent.insertChild(idx, it)
-        return it
-
-    # ------------------------------------------------------------------
+    # ==================================================================
     # Layer rename sync (QualityOverhaul 2.1)
-    # ------------------------------------------------------------------
+    # ==================================================================
     def _connect_layer_rename(self, lyr):
-        """Connect layer.nameChanged once per layer; idempotent."""
         if lyr is None:
             return
         lid = lyr.id()
         if lid in self._layer_rename_connections:
-            return  # already connected
+            return
         try:
             slot = lambda *_a, _lid=lid, _lyr=lyr: self._on_layer_renamed(_lid, _lyr)
             lyr.nameChanged.connect(slot)
@@ -518,7 +755,6 @@ class BetterLayerOrderDock(QDockWidget):
             _log(f"_connect_layer_rename: failed for {lid}: {e!r}", Qgis.Warning)
 
     def _disconnect_layer_rename(self, lid):
-        """Disconnect (and forget) the rename listener for a layer id."""
         entry = self._layer_rename_connections.pop(lid, None)
         if entry is None:
             return
@@ -526,58 +762,34 @@ class BetterLayerOrderDock(QDockWidget):
         try:
             lyr.nameChanged.disconnect(slot)
         except Exception:
-            pass  # already disconnected or layer gone
+            pass
 
     def _on_layer_renamed(self, lid, lyr):
-        """Update the tree label when a layer is renamed externally."""
+        """Layer renamed in Layers panel → update Model (which updates the tree)."""
+        if self._syncing_from_model:
+            return
         try:
             new_name = lyr.name()
         except RuntimeError:
-            # Layer was deleted; the on_layers_removed path will clean up.
             return
-        it = self.find_layer_item(lid)
-        if it is None:
-            return
-        try:
-            if it.text(0) != new_name:
-                it.setText(0, new_name)
-                _log(f"_on_layer_renamed: {lid} → '{new_name}'")
-        except RuntimeError:
-            pass  # item already gone
+        # Route through Model so the tree update goes through the event path
+        self._model.rename_layer(lid, new_name)
 
     def _disconnect_all_layer_renames(self):
-        """Disconnect every rename listener — used on unload / project clear."""
         for lid in list(self._layer_rename_connections.keys()):
             self._disconnect_layer_rename(lid)
 
-    # ------------------------------------------------------------------
+    # ==================================================================
     # Visibility checkbox sync (QualityOverhaul 3.1)
-    # ------------------------------------------------------------------
+    # ==================================================================
     def _find_layer_tree_layer(self, layer_id):
-        """Return the QgsLayerTreeLayer for a layer id, or None."""
         try:
             root = QgsProject.instance().layerTreeRoot()
             return root.findLayer(layer_id)
         except Exception:
             return None
 
-    def _set_layer_item_check_state(self, item, lyr):
-        """Initialise a layer item's check state from the layer tree."""
-        try:
-            ltl = self._find_layer_tree_layer(lyr.id())
-            visible = bool(ltl.itemVisibilityChecked()) if ltl is not None else True
-        except Exception:
-            visible = True
-        # Suppress itemChanged during programmatic state set
-        was = self._in_visibility_sync
-        self._in_visibility_sync = True
-        try:
-            item.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
-        finally:
-            self._in_visibility_sync = was
-
     def _connect_layer_visibility(self, lyr):
-        """Connect QgsLayerTreeLayer.visibilityChanged for this layer (idempotent)."""
         if lyr is None:
             return
         lid = lyr.id()
@@ -608,11 +820,8 @@ class BetterLayerOrderDock(QDockWidget):
             self._disconnect_layer_visibility(lid)
 
     def _on_layer_visibility_external(self, lid):
-        """A layer's visibility changed in the Layers panel — sync the tree item."""
+        """Layer visibility toggled in Layers panel → update Model."""
         if self._in_visibility_sync:
-            return
-        it = self.find_layer_item(lid)
-        if it is None:
             return
         ltl = self._find_layer_tree_layer(lid)
         if ltl is None:
@@ -621,30 +830,18 @@ class BetterLayerOrderDock(QDockWidget):
             visible = bool(ltl.itemVisibilityChecked())
         except RuntimeError:
             return
-        self._in_visibility_sync = True
-        try:
-            it.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
-            # Group tri-state is updated automatically by Qt (ItemIsAutoTristate).
-        finally:
-            self._in_visibility_sync = False
+        # Route through Model
+        self._model.set_visibility(lid, visible)
 
     def _on_tree_item_changed(self, item, column):
-        """Handle user checkbox toggles. Propagate to the layer tree.
-
-        Note: with ItemIsAutoTristate on groups, Qt propagates parent toggles
-        to children automatically and fires itemChanged for each child layer.
-        So we only need to handle TYPE_LAYER here — group toggles resolve
-        themselves through the per-layer handlers.
-        """
+        """User toggled a checkbox in Plus → propagate to Model."""
         if column != 0:
             return
-        if self._in_visibility_sync:
+        if self._in_visibility_sync or self._syncing_from_model:
             return
         t = item.data(0, ROLE_TYPE)
         if t == TYPE_LAYER:
             self._on_layer_check_toggled(item)
-        # Group check-state changes are driven by auto-tristate and resolved
-        # via the per-layer itemChanged fires that follow.
 
     def _on_layer_check_toggled(self, item):
         lid = item.data(0, ROLE_ID)
@@ -653,31 +850,26 @@ class BetterLayerOrderDock(QDockWidget):
         if ltl is None:
             return
         try:
+            self._in_visibility_sync = True
             ltl.setItemVisibilityChecked(checked)
-            # Trigger a map refresh via the layer tree (QGIS handles canvas refresh)
             try:
                 root = QgsProject.instance().layerTreeRoot()
                 root.emitVisibilityChanged()
             except Exception:
                 pass
+            # Also update Model so it stays in sync
+            self._model.set_visibility(lid, checked)
             _log(f"_on_layer_check_toggled: {lid} visible={checked}")
         except Exception as e:
             _log(f"_on_layer_check_toggled FAILED: {e!r}", Qgis.Critical)
-            return
-        # Group tri-state is updated automatically by Qt (ItemIsAutoTristate).
+        finally:
+            self._in_visibility_sync = False
 
+    # ==================================================================
+    # Layer ordering source (QualityOverhaul 1.2)
+    # ==================================================================
     def _ordered_project_layers(self):
-        """
-        Return project layers in the order QGIS would actually draw them.
-
-        Preference (QualityOverhaul 1.2):
-          1. root.customLayerOrder()           — when hasCustomLayerOrder is True
-          2. root.layerOrder()                 — current legend/draw order
-          3. proj.mapLayers().values()         — final fallback (unordered)
-
-        Falls back silently and logs which path was taken, so the log tab
-        shows why a project opened in a particular order.
-        """
+        """Return project layers in the order QGIS would draw them."""
         proj = QgsProject.instance()
         root = proj.layerTreeRoot()
         try:
@@ -697,78 +889,58 @@ class BetterLayerOrderDock(QDockWidget):
         _log(f"_ordered_project_layers: fallback to mapLayers ({len(ml)} layers, unordered)", Qgis.Warning)
         return ml
 
-    def _populate_all_layers_top_level(self):
-        for lyr in self._ordered_project_layers():
-            self._add_layer_item(None, lyr)
-
-    def _append_missing_layers(self):
-        existing = set(self.iter_all_layer_ids())
-        for lyr in self._ordered_project_layers():
-            if lyr.id() not in existing:
-                self._add_layer_item(None, lyr)
-
     # ==================================================================
-    # group operations (FIXES THE CRASH)
+    # Group operations — route through Model
     # ==================================================================
     def create_group_from_selection(self):
-        if not self.is_control_enabled():
+        if not self.is_control_enabled() or self._is_busy:
             return
-        before = self._snapshot or self._serialize_tree()
-
-        default_name = unique_group_name(self.tree, "New group")
-        name, ok = QInputDialog.getText(self, "New group", "Group name:", text=default_name)
-        if not ok:
-            return
-        name = (name or "").strip() or default_name
-        # If user kept a name that collides, make it unique
-        if name in collect_group_names(self.tree):
-            name = unique_group_name(self.tree, name)
-
-        selected = self.tree.selectedItems() or []
-        selected_ids = {id(x) for x in selected}
-
-        moving = [it for it in selected if (it.parent() is None or id(it.parent()) not in selected_ids)]
-
-        grp = QTreeWidgetItem([name])
-        grp.setData(0, ROLE_TYPE, TYPE_GROUP)
-        grp.setData(0, ROLE_ID, new_group_id())
         try:
-            grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
-        except Exception:
-            grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-        grp.setIcon(0, icon_group())
-        grp.setCheckState(0, Qt.CheckState.Checked)  # recomputed once children added
+            before = self._model.serialize()
 
-        anchor = self._resolve_anchor_item()
-        if anchor is not None:
-            dest_parent = anchor if anchor.data(0, ROLE_TYPE) == TYPE_GROUP else anchor.parent()
-            dest_index = 0 if dest_parent is None else dest_parent.childCount()
-            if dest_parent is None:
-                dest_index = self.tree.indexOfTopLevelItem(anchor) + 1
-                self.tree.insertTopLevelItem(dest_index, grp)
+            default_name = unique_group_name(self.tree, "New group")
+            name, ok = QInputDialog.getText(self, "New group", "Group name:", text=default_name)
+            if not ok:
+                return
+            name = (name or "").strip() or default_name
+            if name in collect_group_names(self.tree):
+                name = unique_group_name(self.tree, name)
+
+            selected = self.tree.selectedItems() or []
+            selected_ids = {id(x) for x in selected}
+            moving = [it for it in selected
+                      if (it.parent() is None or id(it.parent()) not in selected_ids)]
+
+            # Resolve insertion point
+            anchor = self._resolve_anchor_item()
+            if anchor is not None:
+                parent_id = anchor.data(0, ROLE_ID) if anchor.data(0, ROLE_TYPE) == TYPE_GROUP else None
+                idx = self._index_in_parent(anchor) + 1 if parent_id is None else None
             else:
-                dest_parent.insertChild(dest_index, grp)
-        else:
-            self.tree.addTopLevelItem(grp)
+                parent_id = None
+                idx = None
 
-        # Move selected items into the new group (if any)
-        for it in sorted(moving, key=self._index_in_parent, reverse=True):
-            p = it.parent()
-            if p is None:
-                taken = self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(it))
-            else:
-                taken = p.takeChild(p.indexOfChild(it))
-            if taken is not None:
-                grp.insertChild(0, taken)
+            # Create the group via Model
+            gid = self._model.create_group(name, parent_id=parent_id, index=idx)
 
-        expand_item_and_ancestors(grp)
-        self.tree.setCurrentItem(grp)
-        self.tree.scrollToItem(grp)
+            # Move selected items into the new group (reverse order so first selected ends up on top)
+            for it in sorted(moving, key=self._index_in_parent, reverse=True):
+                self._model.move_item(it.data(0, ROLE_ID), gid, 0)
 
-        self.request_apply()
-        after = self._serialize_tree()
-        self._push_undo(before, after, "Create group")
-        self._autosave()
+            # Expand + select the new group
+            grp_item = find_group_item(self.tree, gid)
+            if grp_item is not None:
+                expand_item_and_ancestors(grp_item)
+                self.tree.setCurrentItem(grp_item)
+                self.tree.scrollToItem(grp_item)
+                self._model.set_expanded(gid, True)
+
+            after = self._model.serialize()
+            self._push_undo(before, after, "Create group")
+            self._autosave()
+        except Exception as e:
+            _log(f"create_group_from_selection FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
 
     def _selected_groups(self):
         return [it for it in self.tree.selectedItems() if it.data(0, ROLE_TYPE) == TYPE_GROUP]
@@ -781,84 +953,68 @@ class BetterLayerOrderDock(QDockWidget):
             cur = cur.parent()
         return d
 
-    def _unwrap_and_remove_group(self, cur):
-        """Move children out in place, then remove the group item."""
-        parent = cur.parent()
-        insert_at = self._index_in_parent(cur)
-        children = []
-        while cur.childCount():
-            children.append(cur.takeChild(0))
-        if parent is None:
-            idx = self.tree.indexOfTopLevelItem(cur)
-            if idx < 0:
-                return
-            self.tree.takeTopLevelItem(idx)
-        else:
-            parent.takeChild(parent.indexOfChild(cur))
-        for ch in children:
-            if parent is None:
-                self.tree.insertTopLevelItem(insert_at, ch)
-            else:
-                parent.insertChild(insert_at, ch)
-            insert_at += 1
-
     def delete_selected_groups(self):
-        if not self.is_control_enabled():
+        if not self.is_control_enabled() or self._is_busy:
             return
-        groups = self._selected_groups()
-        if not groups:
-            return
-        before = self._snapshot or self._serialize_tree()
-        # deepest first so nested selected groups are removed before parents
-        groups.sort(key=self._item_depth, reverse=True)
-        removed = 0
-        for cur in groups:
-            # still in tree?
-            if cur.treeWidget() is not self.tree:
-                continue
-            self._unwrap_and_remove_group(cur)
-            removed += 1
-        if removed == 0:
-            return
-        self.request_apply()
-        after = self._serialize_tree()
-        self._push_undo(before, after, "Delete group" if removed == 1 else f"Delete {removed} groups")
-        self._autosave()
-        self._update_group_actions_enabled()
+        try:
+            groups = self._selected_groups()
+            if not groups:
+                return
+            before = self._model.serialize()
+            # deepest first so nested selected groups are removed before parents
+            groups.sort(key=self._item_depth, reverse=True)
+            removed = 0
+            for cur in groups:
+                if cur.treeWidget() is not self.tree:
+                    continue
+                self._model.delete_group(cur.data(0, ROLE_ID), unwrap_children=True)
+                removed += 1
+            if removed == 0:
+                return
+            after = self._model.serialize()
+            self._push_undo(before, after, "Delete group" if removed == 1 else f"Delete {removed} groups")
+            self._autosave()
+            self._update_group_actions_enabled()
+        except Exception as e:
+            _log(f"delete_selected_groups FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
 
     def rename_selected_group(self):
-        if not self.is_control_enabled():
+        if not self.is_control_enabled() or self._is_busy:
             return
-        groups = self._selected_groups()
-        if len(groups) != 1:
-            return
-        grp = groups[0]
-        before = self._snapshot or self._serialize_tree()
-        current = grp.text(0)
-        name, ok = QInputDialog.getText(self, "Rename group", "Group name:", text=current)
-        if not ok:
-            return
-        name = (name or "").strip()
-        if not name or name == current:
-            return
-        # allow same name as self; uniquify only against others
-        others = collect_group_names(self.tree) - {current}
-        if name in others:
-            name = unique_group_name(self.tree, name)
-        grp.setText(0, name)
-        self.request_apply()
-        after = self._serialize_tree()
-        self._push_undo(before, after, "Rename group")
-        self._autosave()
+        try:
+            groups = self._selected_groups()
+            if len(groups) != 1:
+                return
+            grp = groups[0]
+            before = self._model.serialize()
+            current = grp.text(0)
+            name, ok = QInputDialog.getText(self, "Rename group", "Group name:", text=current)
+            if not ok:
+                return
+            name = (name or "").strip()
+            if not name or name == current:
+                return
+            others = collect_group_names(self.tree) - {current}
+            if name in others:
+                name = unique_group_name(self.tree, name)
+            self._model.rename_group(grp.data(0, ROLE_ID), name)
+            after = self._model.serialize()
+            self._push_undo(before, after, "Rename group")
+            self._autosave()
+        except Exception as e:
+            _log(f"rename_selected_group FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
 
     def _on_item_double_clicked(self, item, column):
-        if not self.is_control_enabled():
+        if not self.is_control_enabled() or self._is_busy:
             return
         if item is None:
             return
         if item.data(0, ROLE_TYPE) == TYPE_GROUP:
-            item.setExpanded(not item.isExpanded())
-        # layers: do nothing (no rename, no toggle)
+            new_state = not item.isExpanded()
+            item.setExpanded(new_state)
+            self._model.set_expanded(item.data(0, ROLE_ID), new_state)
 
     def _on_tree_context_menu(self, pos):
         if not self.is_control_enabled():
@@ -876,7 +1032,6 @@ class BetterLayerOrderDock(QDockWidget):
 
         groups = self._selected_groups()
         sel = self.tree.selectedItems()
-        # if right-click on an item not in selection, select it first
         under = self.tree.itemAt(pos)
         if under is not None and under not in sel:
             self.tree.clearSelection()
@@ -887,12 +1042,8 @@ class BetterLayerOrderDock(QDockWidget):
 
         act_rename.setEnabled(len(groups) == 1)
         act_delete.setEnabled(len(groups) >= 1)
-        # Expand/Collapse: enabled if at least one group is selected.
-        # If clicked outside any item but groups exist in tree, applies to all groups.
         act_expand.setEnabled(len(groups) >= 1)
         act_collapse.setEnabled(len(groups) >= 1)
-        # Move to top/bottom: enabled if at least one item is selected and the
-        # selection isn't already at the boundary.
         act_top.setEnabled(bool(sel))
         act_bottom.setEnabled(bool(sel))
 
@@ -906,59 +1057,41 @@ class BetterLayerOrderDock(QDockWidget):
         elif chosen == act_expand:
             for g in groups:
                 g.setExpanded(True)
+                self._model.set_expanded(g.data(0, ROLE_ID), True)
         elif chosen == act_collapse:
             for g in groups:
                 g.setExpanded(False)
+                self._model.set_expanded(g.data(0, ROLE_ID), False)
         elif chosen == act_top:
             self._move_selected_to_boundary(to_top=True)
         elif chosen == act_bottom:
             self._move_selected_to_boundary(to_top=False)
 
     def _move_selected_to_boundary(self, to_top: bool):
-        """Move all selected items to the top (or bottom) of their respective parents."""
-        if not self.is_control_enabled():
+        if not self.is_control_enabled() or self._is_busy:
             return
-        sel = self.tree.selectedItems()
-        if not sel:
-            return
-        before = self._snapshot or self._serialize_tree()
-        # Sort by current index, descending for take (so indices don't shift under us).
-        # Group by parent so we operate within each parent's range.
         try:
-            self.tree.blockSignals(True)
-            for it in sorted(sel, key=self._index_in_parent, reverse=True):
-                p = it.parent()
-                if p is None:
-                    cur_idx = self.tree.indexOfTopLevelItem(it)
-                    taken = self.tree.takeTopLevelItem(cur_idx)
-                    if to_top:
-                        self.tree.insertTopLevelItem(0, taken)
-                    else:
-                        self.tree.insertTopLevelItem(self.tree.topLevelItemCount(), taken)
-                else:
-                    cur_idx = p.indexOfChild(it)
-                    taken = p.takeChild(cur_idx)
-                    if to_top:
-                        p.insertChild(0, taken)
-                    else:
-                        p.insertChild(p.childCount(), taken)
-        finally:
-            self.tree.blockSignals(False)
-
-        # Re-select the moved items (selection is lost on take).
-        for it in sel:
-            try:
-                it.setSelected(True)
-            except RuntimeError:
-                pass
-
-        after = self._serialize_tree()
-        if before != after:
-            self.request_apply()
-            self._push_undo(before, after, "Move to top" if to_top else "Move to bottom")
-            self._autosave()
-            _log(f"_move_selected_to_boundary({'top' if to_top else 'bottom'}): "
-                 f"moved {len(sel)} item(s)")
+            sel = self.tree.selectedItems()
+            if not sel:
+                return
+            before = self._model.serialize()
+            item_ids = [it.data(0, ROLE_ID) for it in sel]
+            self._model.move_items_to_boundary(item_ids, to_top=to_top)
+            # Re-select (rebuild loses selection)
+            for it in sel:
+                try:
+                    it.setSelected(True)
+                except RuntimeError:
+                    pass
+            after = self._model.serialize()
+            if before != after:
+                self._push_undo(before, after, "Move to top" if to_top else "Move to bottom")
+                self._autosave()
+                _log(f"_move_selected_to_boundary({'top' if to_top else 'bottom'}): "
+                     f"moved {len(sel)} item(s)")
+        except Exception as e:
+            _log(f"_move_selected_to_boundary FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
 
     def _on_selection_changed(self):
         self._capture_anchor_from_selection()
@@ -978,11 +1111,232 @@ class BetterLayerOrderDock(QDockWidget):
     def _autosave(self):
         if not self._save_cb:
             return
-        if self._loading or self._in_undo or self._apply_suspended:
+        if self._is_busy:
             return
-        self._save_cb(self._serialize_tree())
+        self._save_cb(self._model.serialize())
 
     def _serialize_tree(self) -> str:
+        """Snapshot the Model for undo / autosave."""
+        return self._model.serialize()
+
+    # ==================================================================
+    # loading
+    # ==================================================================
+    def load_from_project(self, raw_json: str):
+        _log(f"load_from_project: json_len={len(raw_json) if raw_json else 0}")
+        self._loading = True
+        # Drop rename + visibility listeners — they'll be reconnected as
+        # the rebuild walks the new tree.
+        self._disconnect_all_layer_renames()
+        self._disconnect_all_layer_visibilities()
+        try:
+            # Load into Model inside a notification block — the dock will
+            # rebuild the QTreeWidget once on model_loaded.
+            with self._model.block_notifications():
+                self._model.load_from_json(raw_json)
+                # If no saved JSON, populate from current project layers
+                if not raw_json:
+                    for lyr in self._ordered_project_layers():
+                        self._model.add_layer(lyr.id(), lyr.name())
+            # Force a rebuild (block_notifications suppresses model_loaded,
+            # so we need to trigger it manually)
+            self._rebuild_tree_from_model()
+            self._snapshot = self._model.serialize()
+        finally:
+            self._loading = False
+            self._sync_control_from_project()
+            self._sync_remove_empty_from_project()
+
+    # ==================================================================
+    # layer add/remove (Controller aspect — QGIS signals → Model)
+    # ==================================================================
+    def on_layers_added(self, layers):
+        _log(f"on_layers_added: received {len(layers) if layers else 0} layer(s); "
+             f"_loading={self._loading}, _in_undo={self._in_undo}, "
+             f"is_control_enabled={self.is_control_enabled()}")
+        if self._is_busy:
+            _log("on_layers_added: skipped (busy)", Qgis.Warning)
+            return
+        try:
+            before = self._model.serialize()
+            existing = set(self._model.iter_layer_ids())
+            new_layers = [l for l in layers if l.id() not in existing]
+            if not new_layers:
+                _log("on_layers_added: no new layers (all already present)")
+                return
+
+            anchor = self._resolve_anchor_item()
+            if anchor is not None:
+                if anchor.data(0, ROLE_TYPE) == TYPE_LAYER:
+                    parent_id = None  # top-level (layers don't have group parents by default)
+                    idx = self._index_in_parent(anchor)
+                else:
+                    parent_id = anchor.data(0, ROLE_ID)
+                    idx = 0
+            else:
+                parent_id = None
+                idx = None  # append
+
+            for lyr in new_layers:
+                self._model.add_layer(lyr.id(), lyr.name(),
+                                      parent_id=parent_id, index=idx)
+                if idx is not None:
+                    idx += 1
+
+            after = self._model.serialize()
+            self._push_undo(before, after, "Add layers")
+            self._autosave()
+            _log(f"on_layers_added: inserted {len(new_layers)} layer(s); "
+                 f"tree now has {sum(1 for _ in self._model.iter_layer_ids())} layer items")
+        except Exception as e:
+            _log(f"on_layers_added FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
+
+    def on_layers_removed(self, layer_ids):
+        _log(f"on_layers_removed: received {len(layer_ids) if layer_ids else 0} id(s); "
+             f"_loading={self._loading}, _in_undo={self._in_undo}")
+        if self._is_busy:
+            return
+        try:
+            before = self._model.serialize()
+            for lid in (layer_ids or []):
+                self._model.remove_layer(lid)
+            after = self._model.serialize()
+            self._push_undo(before, after, "Remove layers")
+            self._autosave()
+            _log(f"on_layers_removed: pruned {len(layer_ids or [])} id(s); "
+                 f"tree now has {sum(1 for _ in self._model.iter_layer_ids())} layer items")
+        except Exception as e:
+            _log(f"on_layers_removed FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
+
+    # ==================================================================
+    # apply to QGIS (Controller aspect — Model → QGIS customLayerOrder)
+    # ==================================================================
+    def request_apply(self):
+        if self._apply_suspended or self._is_busy:
+            return
+        self._apply_timer.start(50)
+
+    def _apply_now(self):
+        if self._apply_suspended or self._is_busy:
+            return
+        self._apply_custom_order()
+
+    def _apply_now_force(self):
+        """Apply custom layer order even during undo/loading guards."""
+        self._apply_custom_order()
+
+    def _apply_custom_order(self):
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            if not self.is_control_enabled():
+                root.setHasCustomLayerOrder(False)
+                _log("_apply_custom_order: skipped (control unchecked)")
+                return
+            layers = self._flatten_to_qgs_layers()
+            root.setHasCustomLayerOrder(True)
+            root.setCustomLayerOrder(layers)
+            _log(f"_apply_custom_order: applied {len(layers)} layer(s) to custom order")
+            try:
+                self.iface.mapCanvas().refresh()
+            except Exception as e:
+                _log(f"_apply_custom_order: mapCanvas.refresh failed: {e!r}", Qgis.Warning)
+        except Exception as e:
+            _log(f"_apply_custom_order FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
+
+    # ==================================================================
+    # events (undo hooks)
+    # ==================================================================
+    def _on_rows_moved(self, *args, **kwargs):
+        if not self.is_control_enabled() or self._is_busy:
+            return
+        # Dual-undo guard (QualityOverhaul 1.1 / 4.5)
+        if getattr(self.tree, "_just_custom_dropped", False):
+            _log("_on_rows_moved: skipped (custom drop already pushed undo)")
+            return
+        before = self._snapshot or self._model.serialize()
+        after = self._model.serialize()
+        self.request_apply()
+        self._push_undo(before, after, "Reorder layers")
+        self._autosave()
+
+    def _push_undo(self, before: str, after: str, text: str):
+        if self._is_busy:
+            return
+        if (before or "") == (after or ""):
+            self._snapshot = after or ""
+            return
+        self.undo_stack.push(TreeStateCommand(self, before, after, text))
+        self._snapshot = after or ""
+
+    def _apply_tree_state_from_undo(self, raw_json: str):
+        self._in_undo = True
+        try:
+            # Load into Model inside a block — dock rebuilds on exit
+            with self._model.block_notifications():
+                self._model.load_from_json(raw_json)
+            self._rebuild_tree_from_model()
+            self._apply_now_force()
+            self._snapshot = self._model.serialize()
+        finally:
+            self._in_undo = False
+
+    def _on_tree_changed_external(self, before_json: str, after_json: str):
+        """Called by BetterLayerTree.dropEvent after a custom drag-drop.
+
+        The QTreeWidget has already been mutated by the drop; we need to
+        sync the Model to match. Easiest: deserialize after_json into Model.
+        """
+        if not self.is_control_enabled() or self._is_busy:
+            return
+        try:
+            # The dropEvent already manipulated the QTreeWidget directly.
+            # Rebuild the Model from the QTreeWidget's current state.
+            # We do this by serializing the tree and loading into Model.
+            # But _serialize_tree now reads from Model — so we need to
+            # reconstruct the Model from the QTreeWidget here.
+            self._sync_model_from_tree()
+            self.request_apply()
+            self._push_undo(before_json, after_json, "Reorder layers")
+            self._autosave()
+        except Exception as e:
+            _log(f"_on_tree_changed_external FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
+
+    def _sync_model_from_tree(self):
+        """Rebuild the Model from the current QTreeWidget state.
+
+        Used after BetterLayerTree.dropEvent mutates the tree directly.
+        In a pure MVC architecture the dropEvent would route through the
+        Model, but BetterLayerTree's custom drop logic (OnItem+layer creates
+        a group, etc.) is complex enough that we keep it operating on the
+        QTreeWidget and sync back to Model afterwards.
+        """
+        self._syncing_from_model = True
+        try:
+            with self._model.block_notifications():
+                # Serialize the QTreeWidget manually (can't use _serialize_tree
+                # because that reads from Model now)
+                raw = self._serialize_tree_widget()
+                self._model.load_from_json(raw)
+            # Update visibility flags on Model layer nodes from checkboxes
+            for lid in self._model.iter_layer_ids():
+                it = find_layer_item(self.tree, lid)
+                if it is not None:
+                    visible = it.checkState(0) == Qt.CheckState.Checked
+                    node = self._model.find_item(lid)
+                    if isinstance(node, LayerNode):
+                        node.visible = visible
+        finally:
+            self._syncing_from_model = False
+
+    def _serialize_tree_widget(self) -> str:
+        """Serialize the QTreeWidget directly (not the Model).
+
+        Used by _sync_model_from_tree after dropEvent mutates the tree.
+        """
         def ser_item(item):
             t = item.data(0, ROLE_TYPE)
             if t == TYPE_GROUP:
@@ -997,7 +1351,12 @@ class BetterLayerOrderDock(QDockWidget):
                     "expanded": expanded,
                     "children": [ser_item(item.child(i)) for i in range(item.childCount())],
                 }
-            return {"type": TYPE_LAYER, "id": item.data(0, ROLE_ID)}
+            return {
+                "type": TYPE_LAYER,
+                "id": item.data(0, ROLE_ID),
+                "name": item.text(0),
+                "visible": item.checkState(0) == Qt.CheckState.Checked,
+            }
 
         return json.dumps(
             {
@@ -1005,286 +1364,5 @@ class BetterLayerOrderDock(QDockWidget):
                 "children": [ser_item(self.tree.topLevelItem(i))
                              for i in range(self.tree.topLevelItemCount())],
             },
-            ensure_ascii=False
+            ensure_ascii=False,
         )
-
-    # ==================================================================
-    # loading
-    # ==================================================================
-    def load_from_project(self, raw_json: str):
-        _log(f"load_from_project: json_len={len(raw_json) if raw_json else 0}")
-        self._loading = True
-        self.tree.blockSignals(True)
-        # Drop rename + visibility listeners from the previous tree — they'll
-        # be reconnected as items are built below.
-        self._disconnect_all_layer_renames()
-        self._disconnect_all_layer_visibilities()
-        try:
-            self.tree.clear()
-            if not raw_json:
-                self._populate_all_layers_top_level()
-                self._snapshot = self._serialize_tree()
-                return
-
-            obj = json.loads(raw_json)
-            # Schema version handling (QualityOverhaul 2.4).
-            # Missing "version" → treat as v1 (legacy pre-1.0.19 saves).
-            schema_ver = obj.get("version")
-            if schema_ver is None:
-                _log("load_from_project: no schema version in JSON — treating as v1 (legacy)")
-                schema_ver = 1
-            elif schema_ver != TREE_JSON_SCHEMA_VERSION:
-                _log(f"load_from_project: schema version {schema_ver} != current "
-                     f"{TREE_JSON_SCHEMA_VERSION} — attempting v1 load anyway", Qgis.Warning)
-            else:
-                _log(f"load_from_project: schema version {schema_ver}")
-
-            proj = QgsProject.instance()
-            # Collect (group_item, expanded_state) pairs to restore after the tree
-            # is fully built — setting expanded during construction is unreliable.
-            expand_targets = []
-
-            def add_child(parent_item, child_item):
-                if parent_item is None:
-                    self.tree.addTopLevelItem(child_item)
-                else:
-                    parent_item.addChild(child_item)
-
-            def build(parent, node):
-                if node["type"] == TYPE_GROUP:
-                    it = QTreeWidgetItem([node.get("name", "Group")])
-                    it.setData(0, ROLE_TYPE, TYPE_GROUP)
-                    it.setData(0, ROLE_ID, node.get("id", new_group_id()))
-                    try:
-                        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
-                    except Exception:
-                        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-                    it.setIcon(0, icon_group())
-                    it.setCheckState(0, Qt.CheckState.Checked)  # auto-tristate recomputes once children are added
-                    add_child(parent, it)
-                    # Default to expanded=True for legacy saves (matches pre-1.0.19 behaviour);
-                    # otherwise honour the saved state.
-                    expanded = node.get("expanded", True)
-                    expand_targets.append((it, bool(expanded)))
-                    for ch in node.get("children", []):
-                        build(it, ch)
-                else:
-                    lyr = proj.mapLayer(node["id"])
-                    if lyr:
-                        self._add_layer_item(parent, lyr)
-
-            for top in obj.get("children", []):
-                build(None, top)
-
-            self._append_missing_layers()
-
-            # Restore expanded state now that all items exist.
-            for it, expanded in expand_targets:
-                try:
-                    it.setExpanded(expanded)
-                except RuntimeError:
-                    pass  # item already gone
-
-            self._snapshot = self._serialize_tree()
-        finally:
-            self.tree.blockSignals(False)
-            self._loading = False
-            self._sync_control_from_project()
-            self._sync_remove_empty_from_project()
-
-    # ==================================================================
-    # layer add/remove (ANCHOR-BASED)
-    # ==================================================================
-    def on_layers_added(self, layers):
-        _log(f"on_layers_added: received {len(layers) if layers else 0} layer(s); "
-             f"_loading={self._loading}, _in_undo={self._in_undo}, "
-             f"is_control_enabled={self.is_control_enabled()}")
-        if self._loading or self._in_undo:
-            _log("on_layers_added: skipped (loading or undo in progress)", Qgis.Warning)
-            return
-
-        try:
-            before = self._serialize_tree()
-            existing = set(self.iter_all_layer_ids())
-            new_layers = [l for l in layers if l.id() not in existing]
-            if not new_layers:
-                _log("on_layers_added: no new layers (all already present)")
-                return
-
-            anchor = self._resolve_anchor_item()
-            dest_parent = None
-            dest_index = 0
-
-            if anchor:
-                if anchor.data(0, ROLE_TYPE) == TYPE_LAYER:
-                    dest_parent = anchor.parent()
-                    dest_index = self._index_in_parent(anchor)
-                else:
-                    dest_parent = anchor
-                    dest_index = 0
-
-            for lyr in new_layers:
-                self._insert_layer_item(dest_parent, dest_index, lyr)
-                dest_index += 1
-
-            self.request_apply()
-            after = self._serialize_tree()
-            self._push_undo(before, after, "Add layers")
-            self._autosave()
-            _log(f"on_layers_added: inserted {len(new_layers)} layer(s); "
-                 f"tree now has {sum(1 for _ in self.iter_all_layer_ids())} layer items")
-        except Exception as e:
-            _log(f"on_layers_added FAILED: {e!r}", Qgis.Critical)
-            import traceback
-            _log(traceback.format_exc(), Qgis.Critical)
-
-    def on_layers_removed(self, layer_ids):
-        _log(f"on_layers_removed: received {len(layer_ids) if layer_ids else 0} id(s); "
-             f"_loading={self._loading}, _in_undo={self._in_undo}")
-        if self._loading or self._in_undo:
-            return
-
-        try:
-            before = self._serialize_tree()
-            remove_set = set(layer_ids or [])
-
-            # Disconnect rename + visibility listeners for the layers being removed.
-            for lid in remove_set:
-                self._disconnect_layer_rename(lid)
-                self._disconnect_layer_visibility(lid)
-
-            def prune(parent):
-                i = 0
-                while i < parent.childCount():
-                    ch = parent.child(i)
-                    t = ch.data(0, ROLE_TYPE)
-                    if t == TYPE_LAYER and ch.data(0, ROLE_ID) in remove_set:
-                        parent.takeChild(i)
-                        continue
-                    if t == TYPE_GROUP:
-                        prune(ch)
-                        # remove empty groups? keep them; do nothing
-                    i += 1
-
-            self._loading = True
-            self.tree.blockSignals(True)
-            try:
-                for i in reversed(range(self.tree.topLevelItemCount())):
-                    top = self.tree.topLevelItem(i)
-                    t = top.data(0, ROLE_TYPE)
-                    if t == TYPE_LAYER and top.data(0, ROLE_ID) in remove_set:
-                        self.tree.takeTopLevelItem(i)
-                    elif t == TYPE_GROUP:
-                        prune(top)
-                # QualityOverhaul 2.2: optionally drop groups that became empty.
-                if self._should_remove_empty_groups():
-                    self._prune_empty_groups()
-            finally:
-                self.tree.blockSignals(False)
-                self._loading = False
-
-            self.request_apply()
-            after = self._serialize_tree()
-            self._push_undo(before, after, "Remove layers")
-            self._autosave()
-            _log(f"on_layers_removed: pruned {len(remove_set)} id(s); "
-                 f"tree now has {sum(1 for _ in self.iter_all_layer_ids())} layer items")
-        except Exception as e:
-            _log(f"on_layers_removed FAILED: {e!r}", Qgis.Critical)
-            import traceback
-            _log(traceback.format_exc(), Qgis.Critical)
-
-    # ==================================================================
-    # apply to QGIS
-    # ==================================================================
-    def request_apply(self):
-        # Normal path: debounce. Blocked during project load / suspend.
-        # Undo uses _apply_now_force() so order is restored immediately.
-        if self._apply_suspended or self._loading or self._in_undo:
-            return
-        self._apply_timer.start(50)
-
-    def _apply_now(self):
-        if self._apply_suspended or self._loading or self._in_undo:
-            return
-        self._apply_custom_order()
-
-    def _apply_now_force(self):
-        """Apply custom layer order even during undo/loading guards."""
-        self._apply_custom_order()
-
-    def _apply_custom_order(self):
-        try:
-            root = QgsProject.instance().layerTreeRoot()
-            if not self.is_control_enabled():
-                # Panel must not force custom order while the checkbox is off
-                root.setHasCustomLayerOrder(False)
-                _log("_apply_custom_order: skipped (control unchecked)")
-                return
-            layers = self._flatten_to_qgs_layers()
-            root.setHasCustomLayerOrder(True)
-            root.setCustomLayerOrder(layers)
-            _log(f"_apply_custom_order: applied {len(layers)} layer(s) to custom order")
-
-            try:
-                self.iface.mapCanvas().refresh()
-            except Exception as e:
-                _log(f"_apply_custom_order: mapCanvas.refresh failed: {e!r}", Qgis.Warning)
-        except Exception as e:
-            _log(f"_apply_custom_order FAILED: {e!r}", Qgis.Critical)
-            import traceback
-            _log(traceback.format_exc(), Qgis.Critical)
-
-    # ==================================================================
-    # events (undo hooks)
-    # ==================================================================
-    def _on_rows_moved(self, *args, **kwargs):
-        if not self.is_control_enabled():
-            return
-        if self._in_undo or self._loading:
-            return
-        # Dual-undo guard (QualityOverhaul 1.1 / 4.5):
-        # Custom dropEvent already pushed undo via _on_tree_changed_external.
-        # rowsMoved also fires because take/insert manipulates the model, so
-        # without this guard a single drag would push TWO undo entries.
-        if getattr(self.tree, "_just_custom_dropped", False):
-            _log("_on_rows_moved: skipped (custom drop already pushed undo)")
-            return
-        # InternalMove not always triggers our custom drop path; take snapshot-based undo.
-        before = self._snapshot or self._serialize_tree()
-        after = self._serialize_tree()
-        self.request_apply()
-        self._push_undo(before, after, "Reorder layers")
-        self._autosave()
-
-    # Inline edit disabled; rename goes through rename_selected_group() dialog.
-
-    def _push_undo(self, before: str, after: str, text: str):
-        if self._in_undo or self._loading:
-            return
-        if (before or "") == (after or ""):
-            self._snapshot = after or ""
-            return
-        self.undo_stack.push(TreeStateCommand(self, before, after, text))
-        self._snapshot = after or ""
-
-    def _apply_tree_state_from_undo(self, raw_json: str):
-        self._in_undo = True
-        try:
-            self.load_from_project(raw_json)
-            # request_apply() is a no-op while _in_undo is True — force apply
-            # so the map canvas order matches the restored tree.
-            self._apply_now_force()
-            self._snapshot = self._serialize_tree()
-        finally:
-            self._in_undo = False
-
-    def _on_tree_changed_external(self, before_json: str, after_json: str):
-        if not self.is_control_enabled():
-            return
-        if self._in_undo or self._loading:
-            return
-
-        self.request_apply()
-        self._push_undo(before_json, after_json, "Reorder layers")
-        self._autosave()
