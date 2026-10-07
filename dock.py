@@ -1,10 +1,17 @@
 # dock.py
+"""Layer Order Plus dock widget.
+
+This module owns the BetterLayerOrderDock class and the orchestration logic
+(apply state machine, undo wiring, signal handling, project I/O). Pure tree
+helpers live in tree_utils.py; icon helpers in icons.py; the BetterLayerTree
+QTreeWidget subclass in tree_widget.py; the TreeStateCommand in undo.py.
+"""
 import json
 import os
-import uuid
+import traceback
 
 from qgis.PyQt.QtCore import Qt, QTimer, QSize
-from qgis.PyQt.QtGui import QDropEvent, QKeySequence, QUndoCommand, QUndoStack, QIcon
+from qgis.PyQt.QtGui import QKeySequence, QUndoStack
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -14,7 +21,6 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QShortcut,
     QStyle,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -26,18 +32,43 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import (
     QgsProject,
     QgsApplication,
-    QgsIconUtils,
     QgsMapLayer,
-    QgsVectorLayer,
     QgsMessageLog,
     Qgis,
 )
 
+from .tree_utils import (
+    ROLE_TYPE,
+    ROLE_ID,
+    TYPE_GROUP,
+    TYPE_LAYER,
+    new_group_id,
+    collect_group_names,
+    unique_group_name,
+    expand_item_and_ancestors,
+    find_group_item,
+    find_layer_item,
+    iter_all_layer_ids,
+    index_in_parent,
+    prune_empty_groups,
+)
+from .icons import (
+    icon_group,
+    icon_add_group,
+    icon_remove_group,
+    icon_rename_group,
+    icon_for_layer,
+)
+from .tree_widget import BetterLayerTree
+from .undo import TreeStateCommand
 
-ROLE_TYPE = Qt.ItemDataRole.UserRole + 1   # "group" | "layer"
-ROLE_ID   = Qt.ItemDataRole.UserRole + 2   # group_id | layer_id
 
 LOG_TAG = "LayerOrderPlus"
+
+# Persistence format version (QualityOverhaul 2.4).
+# v1: initial schema — children list, groups carry name/id/expanded/children,
+#     layers carry id. Older saved trees (no "version" field) are treated as v1.
+TREE_JSON_SCHEMA_VERSION = 1
 
 
 def _log(msg, level=Qgis.Info):
@@ -51,453 +82,21 @@ def _log(msg, level=Qgis.Info):
         except Exception:
             pass
 
-TYPE_GROUP = "group"
-TYPE_LAYER = "layer"
 
-# Persistence format version (QualityOverhaul 2.4).
-# v1: initial schema — children list, groups carry name/id/expanded/children,
-#     layers carry id. Older saved trees (no "version" field) are treated as v1.
-TREE_JSON_SCHEMA_VERSION = 1
-
-# QualityOverhaul 3.1: visibility checkbox sync.
-# We track layer_id → QgsMapLayer for visibility prop, and use a guard flag
-# to suppress recursive updates when we are the source of the change.
-ROLE_VISIBILITY = Qt.ItemDataRole.UserRole + 3  # cached "user-toggle-in-progress" marker
-
-
-
-def _new_group_id():
-    return "grp_" + uuid.uuid4().hex[:10]
-
-
-def _collect_group_names(tree: QTreeWidget) -> set:
-    names = set()
-
-    def walk(item: QTreeWidgetItem):
-        if item.data(0, ROLE_TYPE) == TYPE_GROUP:
-            names.add(item.text(0))
-        for i in range(item.childCount()):
-            walk(item.child(i))
-
-    for i in range(tree.topLevelItemCount()):
-        walk(tree.topLevelItem(i))
-    return names
-
-
-def _unique_group_name(tree: QTreeWidget, base: str = "New group") -> str:
-    """Return base, or 'base 2', 'base 3', … if base is already used."""
-    existing = _collect_group_names(tree)
-    if base not in existing:
-        return base
-    n = 2
-    while f"{base} {n}" in existing:
-        n += 1
-    return f"{base} {n}"
-
-
-def _expand_item_and_ancestors(item: QTreeWidgetItem):
-    """Expand item and every parent so the new group is visible."""
-    if item is None:
-        return
-    try:
-        if item.treeWidget() is None:
-            return
-    except RuntimeError:
-        return
-    cur = item
-    while cur is not None:
-        try:
-            cur.setExpanded(True)
-            cur = cur.parent()
-        except RuntimeError:
-            break
-
-
-def _find_group_item(tree: QTreeWidget, group_id: str):
-    """Find a group QTreeWidgetItem by ROLE_ID (safe after async callbacks)."""
-    if not group_id:
-        return None
-
-    def walk(it):
-        try:
-            if it.data(0, ROLE_TYPE) == TYPE_GROUP and it.data(0, ROLE_ID) == group_id:
-                return it
-            for i in range(it.childCount()):
-                found = walk(it.child(i))
-                if found is not None:
-                    return found
-        except RuntimeError:
-            return None
-        return None
-
-    for i in range(tree.topLevelItemCount()):
-        found = walk(tree.topLevelItem(i))
-        if found is not None:
-            return found
-    return None
-
-
-_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-_ICONS_DIR = os.path.join(_PLUGIN_DIR, "icons")
-
-
-def _bundled_icon(filename: str) -> QIcon:
-    """Load an icon shipped with the plugin (always works offline / no theme)."""
-    path = os.path.join(_ICONS_DIR, filename)
-    if os.path.isfile(path):
-        icon = QIcon(path)
-        if not icon.isNull():
-            return icon
-    return QIcon()
-
-
-def _theme_icon(*names) -> QIcon:
-    for name in names:
-        for candidate in (name, name.lstrip("/"), "/" + name.lstrip("/")):
-            try:
-                icon = QgsApplication.getThemeIcon(candidate)
-            except Exception:
-                icon = QIcon()
-            if icon is not None and not icon.isNull():
-                return icon
-    return QIcon()
-
-
-def _icon_group() -> QIcon:
-    """Folder icon for order-groups."""
-    icon = _bundled_icon("folder.svg")
-    if not icon.isNull():
-        return icon
-    icon = _theme_icon("/mIconFolder.svg", "/mIconFolderOpen.svg")
-    if not icon.isNull():
-        return icon
-    try:
-        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
-    except Exception:
-        try:
-            return QApplication.style().standardIcon(QStyle.SP_DirIcon)
-        except Exception:
-            return QIcon()
-
-
-def _icon_add_group() -> QIcon:
-    icon = _bundled_icon("add_group.svg")
-    if not icon.isNull():
-        return icon
-    icon = _theme_icon("/mActionAddGroup.svg", "/mIconAddGroup.svg")
-    if not icon.isNull():
-        return icon
-    return _icon_group()
-
-
-def _icon_remove_group() -> QIcon:
-    icon = _bundled_icon("remove_group.svg")
-    if not icon.isNull():
-        return icon
-    icon = _theme_icon(
-        "/mActionRemoveSelectedLayer.svg",
-        "/mActionDeleteSelected.svg",
-        "/mIconRemove.svg",
-    )
-    if not icon.isNull():
-        return icon
-    try:
-        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
-    except Exception:
-        return _icon_group()
-
-
-def _icon_rename_group() -> QIcon:
-    icon = _bundled_icon("rename_group.svg")
-    if not icon.isNull():
-        return icon
-    icon = _theme_icon("/mActionRenameLayer.svg")
-    if not icon.isNull():
-        return icon
-    try:
-        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
-    except Exception:
-        return _icon_group()
-
-
-def _icon_for_layer(layer) -> QIcon:
-    """Prefer QGIS type icon, then bundled SVG by geometry/type, then generic."""
-    if layer is not None:
-        try:
-            icon = QgsIconUtils.iconForLayer(layer)
-            if icon is not None and not icon.isNull():
-                return icon
-        except Exception:
-            pass
-        try:
-            if isinstance(layer, QgsVectorLayer):
-                try:
-                    icon = QgsIconUtils.iconForWkbType(layer.wkbType())
-                    if icon is not None and not icon.isNull():
-                        return icon
-                except Exception:
-                    pass
-                try:
-                    gname = str(layer.geometryType())
-                    if "Point" in gname:
-                        icon = _bundled_icon("point.svg")
-                        return icon if not icon.isNull() else _theme_icon("/mIconPointLayer.svg")
-                    if "Line" in gname:
-                        icon = _bundled_icon("line.svg")
-                        return icon if not icon.isNull() else _theme_icon("/mIconLineLayer.svg")
-                    if "Polygon" in gname:
-                        icon = _bundled_icon("polygon.svg")
-                        return icon if not icon.isNull() else _theme_icon("/mIconPolygonLayer.svg")
-                except Exception:
-                    pass
-            name = str(layer.type())
-            if "Raster" in name:
-                icon = _bundled_icon("raster.svg")
-                if not icon.isNull():
-                    return icon
-                return _theme_icon("/mIconRaster.svg")
-        except Exception:
-            pass
-    icon = _bundled_icon("layer.svg")
-    if not icon.isNull():
-        return icon
-    icon = _theme_icon("/mIconLayer.png")
-    if not icon.isNull():
-        return icon
-    try:
-        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-    except Exception:
-        return QIcon()
-
-
-class TreeStateCommand(QUndoCommand):
-    def __init__(self, dock, before_json: str, after_json: str, text: str):
-        super().__init__(text)
-        self._dock = dock
-        self._before = before_json
-        self._after = after_json
-
-    def undo(self):
-        self._dock._apply_tree_state_from_undo(self._before)
-
-    def redo(self):
-        self._dock._apply_tree_state_from_undo(self._after)
-
-
-class BetterLayerTree(QTreeWidget):
-    """
-    Drop rules:
-      - OnItem on GROUP  -> move items to TOP of that group
-      - OnItem on LAYER  -> create a new group (default name), put target + dropped items in it
-      - AboveItem        -> move items ABOVE target (same parent as target)
-      - BelowItem        -> move items BELOW target (same parent as target)
-    Safeguards:
-      - ignore OnItem drop onto a moving item
-      - ignore moving an item/group onto its own descendant
-    """
-    def __init__(self, *a, **k):
-        super().__init__(*a, **k)
-        self._after_drop_cb = None         # (before_json, after_json) -> None
-        self._state_provider = None        # () -> json_str
-        self._just_custom_dropped = False
-
-    def set_after_drop_callback(self, cb):
-        self._after_drop_cb = cb
-
-    def set_state_provider(self, cb):
-        self._state_provider = cb
-
-    def _event_pos_point(self, e: QDropEvent):
-        return e.position().toPoint() if hasattr(e, "position") else e.pos()
-
-    def _index_in_parent(self, item: QTreeWidgetItem) -> int:
-        p = item.parent()
-        return p.indexOfChild(item) if p is not None else self.indexOfTopLevelItem(item)
-
-    def _take_item(self, item: QTreeWidgetItem) -> QTreeWidgetItem:
-        p = item.parent()
-        if p is None:
-            return self.takeTopLevelItem(self.indexOfTopLevelItem(item))
-        return p.takeChild(p.indexOfChild(item))
-
-    def _insert_item(self, parent: QTreeWidgetItem, idx: int, item: QTreeWidgetItem):
-        if parent is None:
-            self.insertTopLevelItem(idx, item)
-        else:
-            parent.insertChild(idx, item)
-
-    def _path_key(self, item: QTreeWidgetItem):
-        path = []
-        cur = item
-        while cur is not None:
-            path.append(self._index_in_parent(cur))
-            cur = cur.parent()
-        return tuple(reversed(path))
-
-    def _is_ancestor(self, anc: QTreeWidgetItem, node: QTreeWidgetItem) -> bool:
-        anc_id = id(anc)
-        cur = node
-        while cur is not None:
-            if id(cur) == anc_id:
-                return True
-            cur = cur.parent()
-        return False
-
-    def dropEvent(self, e: QDropEvent):
-        p = self._event_pos_point(e)
-        pos = self.dropIndicatorPosition()
-
-        if pos in (QAbstractItemView.DropIndicatorPosition.OnItem, QAbstractItemView.DropIndicatorPosition.AboveItem, QAbstractItemView.DropIndicatorPosition.BelowItem):
-            target = self.itemAt(p)
-            if target is None or not self._state_provider:
-                super().dropEvent(e)
-                return
-
-            before = self._state_provider()
-
-            selected = self.selectedItems()
-            selected_ids = {id(x) for x in selected}
-
-            moving = [it for it in selected if (it.parent() is None or id(it.parent()) not in selected_ids)]
-            if not moving:
-                e.ignore()
-                return
-
-            moving_ids = {id(x) for x in moving}
-
-            if pos == QAbstractItemView.DropIndicatorPosition.OnItem and id(target) in moving_ids:
-                e.ignore()
-                return
-
-            for it in moving:
-                if self._is_ancestor(it, target):
-                    e.ignore()
-                    return
-
-            tt = target.data(0, ROLE_TYPE)
-
-            self._just_custom_dropped = True
-
-            # --- OnItem + LAYER: create new group with target + dropped items ---
-            if pos == QAbstractItemView.DropIndicatorPosition.OnItem and tt == TYPE_LAYER:
-                # Ignore if target is among movers (already checked) or would cycle
-                for it in moving:
-                    if self._is_ancestor(it, target):
-                        e.ignore()
-                        self._just_custom_dropped = False
-                        return
-
-                moving.sort(key=self._path_key)
-
-                # Where the new group will sit (target's current slot)
-                grp_parent = target.parent()
-                grp_index = self._index_in_parent(target)
-
-                # Adjust index if we remove movers that sit before the target in same parent
-                for it in moving:
-                    if it.parent() == grp_parent and self._index_in_parent(it) < grp_index:
-                        grp_index -= 1
-
-                # Take movers out of the tree first
-                taken = []
-                for it in reversed(moving):
-                    taken.append(self._take_item(it))
-                taken.reverse()
-
-                # Take target out (still a valid QTreeWidgetItem)
-                target_taken = self._take_item(target)
-
-                # Build group with a unique default name
-                gname = _unique_group_name(self, "New group")
-                grp = QTreeWidgetItem([gname])
-                grp.setData(0, ROLE_TYPE, TYPE_GROUP)
-                grp.setData(0, ROLE_ID, _new_group_id())
-                try:
-                    grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
-                except Exception:
-                    grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-                grp.setIcon(0, _icon_group())
-                grp.setCheckState(0, Qt.CheckState.Checked)  # will be recomputed once children are added
-
-                self._insert_item(grp_parent, grp_index, grp)
-
-                # Children: target first, then dropped items (stable order)
-                grp.addChild(target_taken)
-                for it in taken:
-                    grp.addChild(it)
-
-                self.clearSelection()
-                grp.setSelected(True)
-                self.setCurrentItem(grp)
-
-                # Expand now and again after Qt finishes the drop (avoids collapse).
-                # Use group id — the QTreeWidgetItem pointer can be invalidated if
-                # another handler rebuilds/touches the tree before the timer fires.
-                group_id = grp.data(0, ROLE_ID)
-                _expand_item_and_ancestors(grp)
-
-                def _keep_expanded(gid=group_id, tree=self):
-                    setattr(tree, "_just_custom_dropped", False)
-                    try:
-                        item = _find_group_item(tree, gid)
-                        if item is not None:
-                            _expand_item_and_ancestors(item)
-                            tree.scrollToItem(item)
-                            tree.clearSelection()
-                            item.setSelected(True)
-                            tree.setCurrentItem(item)
-                    except RuntimeError:
-                        pass
-
-                e.accept()
-                after = self._state_provider()
-                if self._after_drop_cb:
-                    self._after_drop_cb(before, after)
-                QTimer.singleShot(0, _keep_expanded)
-                return
-
-            # --- OnItem + GROUP / Above / Below: classic move ---
-            if pos == QAbstractItemView.DropIndicatorPosition.OnItem:
-                # group target: move into top of group
-                dest_parent = target
-                dest_index = 0
-            elif pos == QAbstractItemView.DropIndicatorPosition.AboveItem:
-                dest_parent = target.parent()
-                dest_index = self._index_in_parent(target)
-            else:  # BelowItem
-                dest_parent = target.parent()
-                dest_index = self._index_in_parent(target) + 1
-
-            moving.sort(key=self._path_key)
-
-            for it in moving:
-                if it.parent() == dest_parent and self._index_in_parent(it) < dest_index:
-                    dest_index -= 1
-
-            taken = []
-            for it in reversed(moving):
-                taken.append(self._take_item(it))
-            taken.reverse()
-
-            for it in taken:
-                self._insert_item(dest_parent, dest_index, it)
-                dest_index += 1
-
-            self.clearSelection()
-            for it in taken:
-                it.setSelected(True)
-
-            e.accept()
-
-            after = self._state_provider()
-            if self._after_drop_cb:
-                self._after_drop_cb(before, after)
-
-            QTimer.singleShot(0, lambda: setattr(self, "_just_custom_dropped", False))
-            return
-
-        super().dropEvent(e)
-
+# Backwards-compat aliases — keep the underscore-prefixed names working so
+# any external code or future tests that imported them still resolve.
+_new_group_id = new_group_id
+_collect_group_names = collect_group_names
+_unique_group_name = unique_group_name
+_expand_item_and_ancestors = expand_item_and_ancestors
+_find_group_item = find_group_item
+_find_layer_item = find_layer_item
+_iter_all_layer_ids = iter_all_layer_ids
+_icon_group = icon_group
+_icon_add_group = icon_add_group
+_icon_remove_group = icon_remove_group
+_icon_rename_group = icon_rename_group
+_icon_for_layer = icon_for_layer
 
 class BetterLayerOrderDock(QDockWidget):
     def __init__(self, iface):
@@ -556,9 +155,9 @@ class BetterLayerOrderDock(QDockWidget):
             b.setIconSize(QSize(16, 16))
             return b
 
-        self.btn_add_group = _tb_btn(_icon_add_group(), "Create group")
-        self.btn_rename_group = _tb_btn(_icon_rename_group(), "Rename group")
-        self.btn_del_group = _tb_btn(_icon_remove_group(), "Delete group")
+        self.btn_add_group = _tb_btn(icon_add_group(), "Create group")
+        self.btn_rename_group = _tb_btn(icon_rename_group(), "Rename group")
+        self.btn_del_group = _tb_btn(icon_remove_group(), "Delete group")
 
         head.addWidget(self.btn_add_group)
         head.addWidget(self.btn_rename_group)
@@ -793,36 +392,11 @@ class BetterLayerOrderDock(QDockWidget):
             self.tree.blockSignals(False)
 
     def _prune_empty_groups(self):
-        """Walk the tree and remove group nodes with childCount() == 0.
+        """Remove empty groups from the tree. Returns count removed.
 
-        Top-level groups and nested groups alike. Returns the count removed.
+        Delegates to tree_utils.prune_empty_groups (QualityOverhaul 4.2 dedup).
         """
-        removed = 0
-
-        def walk(parent):
-            nonlocal removed
-            i = 0
-            while i < parent.childCount():
-                ch = parent.child(i)
-                if ch.data(0, ROLE_TYPE) == TYPE_GROUP:
-                    walk(ch)  # recurse first
-                    if ch.childCount() == 0:
-                        parent.takeChild(i)
-                        removed += 1
-                        continue
-                i += 1
-
-        # Top-level
-        i = 0
-        while i < self.tree.topLevelItemCount():
-            top = self.tree.topLevelItem(i)
-            if top.data(0, ROLE_TYPE) == TYPE_GROUP:
-                walk(top)
-                if top.childCount() == 0:
-                    self.tree.takeTopLevelItem(i)
-                    removed += 1
-                    continue
-            i += 1
+        removed = prune_empty_groups(self.tree)
         if removed:
             _log(f"_prune_empty_groups: removed {removed} empty group(s)")
         return removed
@@ -878,11 +452,11 @@ class BetterLayerOrderDock(QDockWidget):
 
     def _resolve_anchor_item(self):
         if self._anchor_type == TYPE_LAYER and self._anchor_id:
-            it = self._find_layer_item(self._anchor_id)
+            it = self.find_layer_item(self._anchor_id)
             if it:
                 return it
         if self._anchor_type == TYPE_GROUP and self._anchor_id:
-            it = self._find_group_item(self._anchor_id)
+            it = self.find_group_item(self._anchor_id)
             if it:
                 return it
 
@@ -894,31 +468,13 @@ class BetterLayerOrderDock(QDockWidget):
             return sel[0]
         return None
 
-    def _find_layer_item(self, layer_id):
-        def walk(it):
-            if it.data(0, ROLE_TYPE) == TYPE_LAYER and it.data(0, ROLE_ID) == layer_id:
-                return it
-            for i in range(it.childCount()):
-                r = walk(it.child(i))
-                if r:
-                    return r
-            return None
+    def find_layer_item(self, layer_id):
+        """Delegates to tree_utils.find_layer_item (QualityOverhaul 4.2 dedup)."""
+        return find_layer_item(self.tree, layer_id)
 
-        for i in range(self.tree.topLevelItemCount()):
-            r = walk(self.tree.topLevelItem(i))
-            if r:
-                return r
-        return None
-
-    def _find_group_item(self, group_id):
-        def walk(it):
-            if it.data(0, ROLE_TYPE) == TYPE_GROUP and it.data(0, ROLE_ID) == group_id:
-                return it
-            for i in range(it.childCount()):
-                r = walk(it.child(i))
-                if r:
-                    return r
-            return None
+    def find_group_item(self, group_id):
+        """Delegates to tree_utils.find_group_item (QualityOverhaul 4.2 dedup)."""
+        return find_group_item(self.tree, group_id)
 
         for i in range(self.tree.topLevelItemCount()):
             r = walk(self.tree.topLevelItem(i))
@@ -930,18 +486,12 @@ class BetterLayerOrderDock(QDockWidget):
     # tree helpers
     # ==================================================================
     def _index_in_parent(self, item: QTreeWidgetItem) -> int:
-        p = item.parent()
-        return p.indexOfChild(item) if p is not None else self.tree.indexOfTopLevelItem(item)
+        """Delegates to tree_utils.index_in_parent (QualityOverhaul 4.2 dedup)."""
+        return index_in_parent(self.tree, item)
 
-    def _iter_all_layer_ids(self):
-        def walk(it):
-            if it.data(0, ROLE_TYPE) == TYPE_LAYER:
-                yield it.data(0, ROLE_ID)
-            for i in range(it.childCount()):
-                yield from walk(it.child(i))
-
-        for i in range(self.tree.topLevelItemCount()):
-            yield from walk(self.tree.topLevelItem(i))
+    def iter_all_layer_ids(self):
+        """Yield every layer id in the tree. Delegates to tree_utils."""
+        yield from iter_all_layer_ids(self.tree)
 
     def _flatten_to_qgs_layers(self):
         proj = QgsProject.instance()
@@ -962,35 +512,38 @@ class BetterLayerOrderDock(QDockWidget):
 
         return out
 
-    def _add_layer_item(self, parent: QTreeWidgetItem, lyr):
+    def _make_layer_item(self, lyr) -> QTreeWidgetItem:
+        """Build a layer QTreeWidgetItem (QualityOverhaul 4.2 dedup).
+
+        Shared by _add_layer_item (append) and _insert_layer_item (insert at idx).
+        """
         it = QTreeWidgetItem([lyr.name()])
         it.setData(0, ROLE_TYPE, TYPE_LAYER)
         it.setData(0, ROLE_ID, lyr.id())
         it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-        it.setIcon(0, _icon_for_layer(lyr))
+        it.setIcon(0, icon_for_layer(lyr))
         # QualityOverhaul 3.1: initial visibility from the layer tree.
         self._set_layer_item_check_state(it, lyr)
-        if parent is None:
-            self.tree.addTopLevelItem(it)
-        else:
-            parent.addChild(it)
         self._connect_layer_rename(lyr)
         self._connect_layer_visibility(lyr)
         return it
 
-    def _insert_layer_item(self, parent: QTreeWidgetItem, idx: int, lyr):
-        it = QTreeWidgetItem([lyr.name()])
-        it.setData(0, ROLE_TYPE, TYPE_LAYER)
-        it.setData(0, ROLE_ID, lyr.id())
-        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-        it.setIcon(0, _icon_for_layer(lyr))
-        self._set_layer_item_check_state(it, lyr)
+    def _add_layer_item(self, parent, lyr):
+        """Append a layer item to `parent` (or top-level if parent is None)."""
+        it = self._make_layer_item(lyr)
+        if parent is None:
+            self.tree.addTopLevelItem(it)
+        else:
+            parent.addChild(it)
+        return it
+
+    def _insert_layer_item(self, parent, idx, lyr):
+        """Insert a layer item at `idx` under `parent` (or top-level if None)."""
+        it = self._make_layer_item(lyr)
         if parent is None:
             self.tree.insertTopLevelItem(idx, it)
         else:
             parent.insertChild(idx, it)
-        self._connect_layer_rename(lyr)
-        self._connect_layer_visibility(lyr)
         return it
 
     # ------------------------------------------------------------------
@@ -1028,7 +581,7 @@ class BetterLayerOrderDock(QDockWidget):
         except RuntimeError:
             # Layer was deleted; the on_layers_removed path will clean up.
             return
-        it = self._find_layer_item(lid)
+        it = self.find_layer_item(lid)
         if it is None:
             return
         try:
@@ -1104,7 +657,7 @@ class BetterLayerOrderDock(QDockWidget):
         """A layer's visibility changed in the Layers panel — sync the tree item."""
         if self._in_visibility_sync:
             return
-        it = self._find_layer_item(lid)
+        it = self.find_layer_item(lid)
         if it is None:
             return
         ltl = self._find_layer_tree_layer(lid)
@@ -1195,7 +748,7 @@ class BetterLayerOrderDock(QDockWidget):
             self._add_layer_item(None, lyr)
 
     def _append_missing_layers(self):
-        existing = set(self._iter_all_layer_ids())
+        existing = set(self.iter_all_layer_ids())
         for lyr in self._ordered_project_layers():
             if lyr.id() not in existing:
                 self._add_layer_item(None, lyr)
@@ -1208,14 +761,14 @@ class BetterLayerOrderDock(QDockWidget):
             return
         before = self._snapshot or self._serialize_tree()
 
-        default_name = _unique_group_name(self.tree, "New group")
+        default_name = unique_group_name(self.tree, "New group")
         name, ok = QInputDialog.getText(self, "New group", "Group name:", text=default_name)
         if not ok:
             return
         name = (name or "").strip() or default_name
         # If user kept a name that collides, make it unique
-        if name in _collect_group_names(self.tree):
-            name = _unique_group_name(self.tree, name)
+        if name in collect_group_names(self.tree):
+            name = unique_group_name(self.tree, name)
 
         selected = self.tree.selectedItems() or []
         selected_ids = {id(x) for x in selected}
@@ -1224,12 +777,12 @@ class BetterLayerOrderDock(QDockWidget):
 
         grp = QTreeWidgetItem([name])
         grp.setData(0, ROLE_TYPE, TYPE_GROUP)
-        grp.setData(0, ROLE_ID, _new_group_id())
+        grp.setData(0, ROLE_ID, new_group_id())
         try:
             grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
         except Exception:
             grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-        grp.setIcon(0, _icon_group())
+        grp.setIcon(0, icon_group())
         grp.setCheckState(0, Qt.CheckState.Checked)  # recomputed once children added
 
         anchor = self._resolve_anchor_item()
@@ -1254,7 +807,7 @@ class BetterLayerOrderDock(QDockWidget):
             if taken is not None:
                 grp.insertChild(0, taken)
 
-        _expand_item_and_ancestors(grp)
+        expand_item_and_ancestors(grp)
         self.tree.setCurrentItem(grp)
         self.tree.scrollToItem(grp)
 
@@ -1335,9 +888,9 @@ class BetterLayerOrderDock(QDockWidget):
         if not name or name == current:
             return
         # allow same name as self; uniquify only against others
-        others = _collect_group_names(self.tree) - {current}
+        others = collect_group_names(self.tree) - {current}
         if name in others:
-            name = _unique_group_name(self.tree, name)
+            name = unique_group_name(self.tree, name)
         grp.setText(0, name)
         self.request_apply()
         after = self._serialize_tree()
@@ -1357,9 +910,9 @@ class BetterLayerOrderDock(QDockWidget):
         if not self.is_control_enabled():
             return
         menu = QMenu(self)
-        act_create = menu.addAction(_icon_add_group(), "Create group")
-        act_rename = menu.addAction(_icon_rename_group(), "Rename group")
-        act_delete = menu.addAction(_icon_remove_group(), "Delete group")
+        act_create = menu.addAction(icon_add_group(), "Create group")
+        act_rename = menu.addAction(icon_rename_group(), "Rename group")
+        act_delete = menu.addAction(icon_remove_group(), "Delete group")
         menu.addSeparator()
         act_expand = menu.addAction("Expand group")
         act_collapse = menu.addAction("Collapse group")
@@ -1547,12 +1100,12 @@ class BetterLayerOrderDock(QDockWidget):
                 if node["type"] == TYPE_GROUP:
                     it = QTreeWidgetItem([node.get("name", "Group")])
                     it.setData(0, ROLE_TYPE, TYPE_GROUP)
-                    it.setData(0, ROLE_ID, node.get("id", _new_group_id()))
+                    it.setData(0, ROLE_ID, node.get("id", new_group_id()))
                     try:
                         it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
                     except Exception:
                         it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-                    it.setIcon(0, _icon_group())
+                    it.setIcon(0, icon_group())
                     it.setCheckState(0, Qt.CheckState.Checked)  # auto-tristate recomputes once children are added
                     add_child(parent, it)
                     # Default to expanded=True for legacy saves (matches pre-1.0.19 behaviour);
@@ -1598,7 +1151,7 @@ class BetterLayerOrderDock(QDockWidget):
 
         try:
             before = self._serialize_tree()
-            existing = set(self._iter_all_layer_ids())
+            existing = set(self.iter_all_layer_ids())
             new_layers = [l for l in layers if l.id() not in existing]
             if not new_layers:
                 _log("on_layers_added: no new layers (all already present)")
@@ -1625,7 +1178,7 @@ class BetterLayerOrderDock(QDockWidget):
             self._push_undo(before, after, "Add layers")
             self._autosave()
             _log(f"on_layers_added: inserted {len(new_layers)} layer(s); "
-                 f"tree now has {sum(1 for _ in self._iter_all_layer_ids())} layer items")
+                 f"tree now has {sum(1 for _ in self.iter_all_layer_ids())} layer items")
         except Exception as e:
             _log(f"on_layers_added FAILED: {e!r}", Qgis.Critical)
             import traceback
@@ -1681,7 +1234,7 @@ class BetterLayerOrderDock(QDockWidget):
             self._push_undo(before, after, "Remove layers")
             self._autosave()
             _log(f"on_layers_removed: pruned {len(remove_set)} id(s); "
-                 f"tree now has {sum(1 for _ in self._iter_all_layer_ids())} layer items")
+                 f"tree now has {sum(1 for _ in self.iter_all_layer_ids())} layer items")
         except Exception as e:
             _log(f"on_layers_removed FAILED: {e!r}", Qgis.Critical)
             import traceback
