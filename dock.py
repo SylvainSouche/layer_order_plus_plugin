@@ -18,6 +18,7 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QInputDialog,
+    QMenu,
 )
 
 from qgis.core import QgsProject, QgsApplication, QgsIconUtils, QgsMapLayer, QgsVectorLayer
@@ -134,6 +135,19 @@ def _icon_remove_group() -> QIcon:
         return icon
     try:
         return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+    except Exception:
+        return _icon_group()
+
+
+def _icon_rename_group() -> QIcon:
+    icon = _bundled_icon("rename_group.svg")
+    if not icon.isNull():
+        return icon
+    icon = _theme_icon("/mActionRenameLayer.svg")
+    if not icon.isNull():
+        return icon
+    try:
+        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
     except Exception:
         return _icon_group()
 
@@ -331,9 +345,9 @@ class BetterLayerTree(QTreeWidget):
                 grp.setData(0, ROLE_TYPE, TYPE_GROUP)
                 grp.setData(0, ROLE_ID, _new_group_id())
                 try:
-                    grp.setFlags(grp.flags() | Qt.ItemFlag.ItemIsEditable)
+                    grp.setFlags(grp.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 except Exception:
-                    grp.setFlags(grp.flags() | Qt.ItemIsEditable)
+                    grp.setFlags(grp.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 grp.setIcon(0, _icon_group())
 
                 self._insert_item(grp_parent, grp_index, grp)
@@ -445,21 +459,21 @@ class BetterLayerOrderDock(QDockWidget):
         head = QHBoxLayout()
         lay.addLayout(head)
 
-        self.btn_add_group = QPushButton()
-        self.btn_add_group.setIcon(_icon_add_group())
-        self.btn_add_group.setToolTip("Create group")
-        self.btn_add_group.setFlat(True)
-        self.btn_add_group.setFixedSize(28, 28)
-        self.btn_add_group.setIconSize(QSize(16, 16))
+        def _tb_btn(icon, tip):
+            b = QPushButton()
+            b.setIcon(icon)
+            b.setToolTip(tip)
+            b.setFlat(True)
+            b.setFixedSize(28, 28)
+            b.setIconSize(QSize(16, 16))
+            return b
 
-        self.btn_del_group = QPushButton()
-        self.btn_del_group.setIcon(_icon_remove_group())
-        self.btn_del_group.setToolTip("Delete group")
-        self.btn_del_group.setFlat(True)
-        self.btn_del_group.setFixedSize(28, 28)
-        self.btn_del_group.setIconSize(QSize(16, 16))
+        self.btn_add_group = _tb_btn(_icon_add_group(), "Create group")
+        self.btn_rename_group = _tb_btn(_icon_rename_group(), "Rename group")
+        self.btn_del_group = _tb_btn(_icon_remove_group(), "Delete group")
 
         head.addWidget(self.btn_add_group)
+        head.addWidget(self.btn_rename_group)
         head.addWidget(self.btn_del_group)
         head.addStretch(1)
 
@@ -474,6 +488,8 @@ class BetterLayerOrderDock(QDockWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setRootIsDecorated(True)
         self.tree.setAnimated(True)
+        self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lay.addWidget(self.tree)
 
         # Local shortcuts when the dock has focus (plugin also hooks Edit menu / app shortcuts)
@@ -491,14 +507,18 @@ class BetterLayerOrderDock(QDockWidget):
         self.tree.set_after_drop_callback(self._on_tree_changed_external)
 
         self.btn_add_group.clicked.connect(self.create_group_from_selection)
-        self.btn_del_group.clicked.connect(self.delete_selected_group)
+        self.btn_rename_group.clicked.connect(self.rename_selected_group)
+        self.btn_del_group.clicked.connect(self.delete_selected_groups)
 
         self.tree.model().rowsMoved.connect(self._on_rows_moved)
-        self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
 
-        # anchor capture (persistent)
-        self.tree.itemSelectionChanged.connect(self._capture_anchor_from_selection)
+        # anchor capture + toolbar enable state
+        self.tree.itemSelectionChanged.connect(self._on_selection_changed)
         self.tree.currentItemChanged.connect(self._capture_anchor_from_current)
+
+        self._update_group_actions_enabled()
 
     # ==================================================================
     # external control
@@ -691,7 +711,7 @@ class BetterLayerOrderDock(QDockWidget):
         grp = QTreeWidgetItem([name])
         grp.setData(0, ROLE_TYPE, TYPE_GROUP)
         grp.setData(0, ROLE_ID, _new_group_id())
-        grp.setFlags(grp.flags() | Qt.ItemFlag.ItemIsEditable)
+        grp.setFlags(grp.flags() & ~Qt.ItemFlag.ItemIsEditable)
         grp.setIcon(0, _icon_group())
 
         anchor = self._resolve_anchor_item()
@@ -725,27 +745,31 @@ class BetterLayerOrderDock(QDockWidget):
         self._push_undo(before, after, "Create group")
         self._autosave()
 
-    def delete_selected_group(self):
-        before = self._snapshot or self._serialize_tree()
-        cur = self.tree.currentItem()
-        if cur is None or cur.data(0, ROLE_TYPE) != TYPE_GROUP:
-            return
+    def _selected_groups(self):
+        return [it for it in self.tree.selectedItems() if it.data(0, ROLE_TYPE) == TYPE_GROUP]
 
+    def _item_depth(self, item):
+        d = 0
+        cur = item
+        while cur is not None:
+            d += 1
+            cur = cur.parent()
+        return d
+
+    def _unwrap_and_remove_group(self, cur):
+        """Move children out in place, then remove the group item."""
         parent = cur.parent()
         insert_at = self._index_in_parent(cur)
-
-        # move children out of group (preserve order)
         children = []
         while cur.childCount():
             children.append(cur.takeChild(0))
-
-        # remove group
         if parent is None:
-            self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(cur))
+            idx = self.tree.indexOfTopLevelItem(cur)
+            if idx < 0:
+                return
+            self.tree.takeTopLevelItem(idx)
         else:
             parent.takeChild(parent.indexOfChild(cur))
-
-        # reinsert children where group was
         for ch in children:
             if parent is None:
                 self.tree.insertTopLevelItem(insert_at, ch)
@@ -753,10 +777,95 @@ class BetterLayerOrderDock(QDockWidget):
                 parent.insertChild(insert_at, ch)
             insert_at += 1
 
+    def delete_selected_groups(self):
+        groups = self._selected_groups()
+        if not groups:
+            return
+        before = self._snapshot or self._serialize_tree()
+        # deepest first so nested selected groups are removed before parents
+        groups.sort(key=self._item_depth, reverse=True)
+        removed = 0
+        for cur in groups:
+            # still in tree?
+            if cur.treeWidget() is not self.tree:
+                continue
+            self._unwrap_and_remove_group(cur)
+            removed += 1
+        if removed == 0:
+            return
         self.request_apply()
         after = self._serialize_tree()
-        self._push_undo(before, after, "Delete group")
+        self._push_undo(before, after, "Delete group" if removed == 1 else f"Delete {removed} groups")
         self._autosave()
+        self._update_group_actions_enabled()
+
+    def rename_selected_group(self):
+        groups = self._selected_groups()
+        if len(groups) != 1:
+            return
+        grp = groups[0]
+        before = self._snapshot or self._serialize_tree()
+        current = grp.text(0)
+        name, ok = QInputDialog.getText(self, "Rename group", "Group name:", text=current)
+        if not ok:
+            return
+        name = (name or "").strip()
+        if not name or name == current:
+            return
+        # allow same name as self; uniquify only against others
+        others = _collect_group_names(self.tree) - {current}
+        if name in others:
+            name = _unique_group_name(self.tree, name)
+        grp.setText(0, name)
+        self.request_apply()
+        after = self._serialize_tree()
+        self._push_undo(before, after, "Rename group")
+        self._autosave()
+
+    def _on_item_double_clicked(self, item, column):
+        if item is None:
+            return
+        if item.data(0, ROLE_TYPE) == TYPE_GROUP:
+            item.setExpanded(not item.isExpanded())
+        # layers: do nothing (no rename, no toggle)
+
+    def _on_tree_context_menu(self, pos):
+        menu = QMenu(self)
+        act_create = menu.addAction(_icon_add_group(), "Create group")
+        act_rename = menu.addAction(_icon_rename_group(), "Rename group")
+        act_delete = menu.addAction(_icon_remove_group(), "Delete group")
+
+        groups = self._selected_groups()
+        # if right-click on an item not in selection, select it first
+        under = self.tree.itemAt(pos)
+        if under is not None and under not in self.tree.selectedItems():
+            self.tree.clearSelection()
+            under.setSelected(True)
+            self.tree.setCurrentItem(under)
+            groups = self._selected_groups()
+
+        act_rename.setEnabled(len(groups) == 1)
+        act_delete.setEnabled(len(groups) >= 1)
+
+        chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
+        if chosen == act_create:
+            self.create_group_from_selection()
+        elif chosen == act_rename:
+            self.rename_selected_group()
+        elif chosen == act_delete:
+            self.delete_selected_groups()
+
+    def _on_selection_changed(self):
+        self._capture_anchor_from_selection()
+        self._update_group_actions_enabled()
+
+    def _update_group_actions_enabled(self):
+        groups = self._selected_groups()
+        n = len(groups)
+        if hasattr(self, "btn_rename_group"):
+            self.btn_rename_group.setEnabled(n == 1)
+        if hasattr(self, "btn_del_group"):
+            self.btn_del_group.setEnabled(n >= 1)
 
     # ==================================================================
     # persistence
@@ -814,7 +923,7 @@ class BetterLayerOrderDock(QDockWidget):
                     it = QTreeWidgetItem([node.get("name", "Group")])
                     it.setData(0, ROLE_TYPE, TYPE_GROUP)
                     it.setData(0, ROLE_ID, node.get("id", _new_group_id()))
-                    it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
+                    it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     it.setIcon(0, _icon_group())
                     add_child(parent, it)
                     for ch in node.get("children", []):
@@ -951,33 +1060,7 @@ class BetterLayerOrderDock(QDockWidget):
         self._push_undo(before, after, "Reorder layers")
         self._autosave()
 
-    def _on_item_changed(self, item, col):
-        if self._in_undo or self._loading:
-            return
-        if item.data(0, ROLE_TYPE) != TYPE_GROUP:
-            return
-
-        if not self._rename_pending:
-            self._rename_pending = True
-            self._rename_before = self._snapshot or self._serialize_tree()
-
-        self._rename_timer.start(300)
-
-    def _commit_rename_undo(self):
-        if self._in_undo or self._loading:
-            self._rename_pending = False
-            self._rename_before = ""
-            return
-
-        before = self._rename_before or (self._snapshot or self._serialize_tree())
-        after = self._serialize_tree()
-
-        self.request_apply()
-        self._push_undo(before, after, "Rename group")
-        self._autosave()
-
-        self._rename_pending = False
-        self._rename_before = ""
+    # Inline edit disabled; rename goes through rename_selected_group() dialog.
 
     def _push_undo(self, before: str, after: str, text: str):
         if self._in_undo or self._loading:
