@@ -53,6 +53,11 @@ def _log(msg, level=Qgis.Info):
 TYPE_GROUP = "group"
 TYPE_LAYER = "layer"
 
+# Persistence format version (QualityOverhaul 2.4).
+# v1: initial schema — children list, groups carry name/id/expanded/children,
+#     layers carry id. Older saved trees (no "version" field) are treated as v1.
+TREE_JSON_SCHEMA_VERSION = 1
+
 
 
 def _new_group_id():
@@ -1032,18 +1037,25 @@ class BetterLayerOrderDock(QDockWidget):
         def ser_item(item):
             t = item.data(0, ROLE_TYPE)
             if t == TYPE_GROUP:
+                try:
+                    expanded = bool(item.isExpanded())
+                except Exception:
+                    expanded = True
                 return {
                     "type": TYPE_GROUP,
                     "id": item.data(0, ROLE_ID),
                     "name": item.text(0),
-                    "expanded": True,
+                    "expanded": expanded,
                     "children": [ser_item(item.child(i)) for i in range(item.childCount())],
                 }
             return {"type": TYPE_LAYER, "id": item.data(0, ROLE_ID)}
 
         return json.dumps(
-            {"children": [ser_item(self.tree.topLevelItem(i))
-                          for i in range(self.tree.topLevelItemCount())]},
+            {
+                "version": TREE_JSON_SCHEMA_VERSION,
+                "children": [ser_item(self.tree.topLevelItem(i))
+                             for i in range(self.tree.topLevelItemCount())],
+            },
             ensure_ascii=False
         )
 
@@ -1062,7 +1074,22 @@ class BetterLayerOrderDock(QDockWidget):
                 return
 
             obj = json.loads(raw_json)
+            # Schema version handling (QualityOverhaul 2.4).
+            # Missing "version" → treat as v1 (legacy pre-1.0.19 saves).
+            schema_ver = obj.get("version")
+            if schema_ver is None:
+                _log("load_from_project: no schema version in JSON — treating as v1 (legacy)")
+                schema_ver = 1
+            elif schema_ver != TREE_JSON_SCHEMA_VERSION:
+                _log(f"load_from_project: schema version {schema_ver} != current "
+                     f"{TREE_JSON_SCHEMA_VERSION} — attempting v1 load anyway", Qgis.Warning)
+            else:
+                _log(f"load_from_project: schema version {schema_ver}")
+
             proj = QgsProject.instance()
+            # Collect (group_item, expanded_state) pairs to restore after the tree
+            # is fully built — setting expanded during construction is unreliable.
+            expand_targets = []
 
             def add_child(parent_item, child_item):
                 if parent_item is None:
@@ -1078,6 +1105,10 @@ class BetterLayerOrderDock(QDockWidget):
                     it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     it.setIcon(0, _icon_group())
                     add_child(parent, it)
+                    # Default to expanded=True for legacy saves (matches pre-1.0.19 behaviour);
+                    # otherwise honour the saved state.
+                    expanded = node.get("expanded", True)
+                    expand_targets.append((it, bool(expanded)))
                     for ch in node.get("children", []):
                         build(it, ch)
                 else:
@@ -1089,6 +1120,14 @@ class BetterLayerOrderDock(QDockWidget):
                 build(None, top)
 
             self._append_missing_layers()
+
+            # Restore expanded state now that all items exist.
+            for it, expanded in expand_targets:
+                try:
+                    it.setExpanded(expanded)
+                except RuntimeError:
+                    pass  # item already gone
+
             self._snapshot = self._serialize_tree()
         finally:
             self.tree.blockSignals(False)
