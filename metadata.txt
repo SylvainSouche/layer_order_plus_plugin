@@ -4,7 +4,7 @@ qgisMinimumVersion=4.0.0
 qgisMaximumVersion=4.99.0
 description=Layer Order panel with grouping (QGIS 4 / PyQt6 fork)
 about=Alternative to the Layer Order panel with order groups. Fork of the original Layer Order Plus 1.0.0 for QGIS 4: PyQt6 imports/enums, undo restores map draw order, folder and layer-type icons. Groups are for ordering only (not Layers-panel groups).
-version=1.0.24
+version=1.0.25
 author=Samuel Kultz (original); Sylvain Souche (QGIS 4 fork)
 email=samkultz@me.com
 category=Productivity
@@ -18,6 +18,7 @@ experimental=True
 deprecated=False
 server=False
 changelog=
+    1.0.25: Name substring filter field (closes QualityOverhaul 3.3)
     1.0.24: Per-layer + per-group visibility checkboxes, bi-directional sync with Layers panel (closes QualityOverhaul 3.1)
     1.0.23: Drop-rule tooltip on tree (closes QualityOverhaul 3.5)
     1.0.22: Context menu Expand/Collapse + Move to top/bottom (closes QualityOverhaul 3.2)
