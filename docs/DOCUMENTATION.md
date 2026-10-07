@@ -1,9 +1,9 @@
 # Layer Order Plus — Documentation
 
 **Plugin:** Layer Order Plus  
-**Version:** 1.0.5 (QGIS 4 fork; next milestone 1.1.0)  
-**Original author:** Samuel Kultz (Kultz Engenharia)  
-**This fork:** QGIS 4 / PyQt6 fixes, undo→map order fix, layer/group icons, documentation  
+**Version:** 1.0.14 (QGIS 4 fork; next milestone **1.1.0**)  
+**Original author:** Samuel Kultz (Kultz Engenharia) — upstream **v1.0.0**  
+**This fork:** https://github.com/SylvainSouche/layer_order_plus_plugin  
 
 ---
 
@@ -20,7 +20,8 @@ QGIS has two related concepts:
 
 - **Order groups** (folders) used only for organising the draw-order list  
 - Drag-and-drop reordering with nested groups  
-- Undo/redo of order changes  
+- Toolbar + context menu for create / rename / delete group  
+- Undo/redo of order changes (panel + **map** custom order), integrated with the Edit menu when not digitizing  
 - Persistence of the tree inside the QGIS project  
 
 The **flattened** top-to-bottom order of layers in this panel becomes the project’s `customLayerOrder` (top of the list draws on top of the map).
@@ -32,208 +33,154 @@ The **flattened** top-to-bottom order of layers in this panel becomes the projec
 ## 2. Requirements
 
 - **QGIS 4.x** (tested on 4.2.x, PyQt6)  
-- This fork uses Qt6 scoped enums; it is **not** compatible with QGIS 3 without a compatibility shim.
+- This fork uses Qt6 scoped enums and `QtGui` undo classes; it is **not** a drop-in for QGIS 3 without a compatibility shim.
 
 ---
 
 ## 3. Installation
 
-1. Download the plugin ZIP.  
-2. In QGIS: **Plugins → Manage and Install Plugins → Install from ZIP**.  
-3. Enable **Layer Order Plus**.  
+1. Build (optional): `make zip` → `dist/layer_order_plus_qgis4-<VERSION>.zip`  
+2. In QGIS: **Plugins → Manage and Install Plugins → Install from ZIP**  
+3. Enable **Layer Order Plus** (experimental plugins may need to be allowed)  
 4. The dock appears (default: left). Toggle via the plugin menu entry.
 
-To uninstall: disable the plugin and remove the folder  
+To uninstall: disable the plugin and remove  
 `…/profiles/<profile>/python/plugins/layer_order_plus_qgis4/`.
 
 ---
 
 ## 4. User guide
 
-### 4.1 Panel overview
+### 4.0 Control rendering order
 
-- **Create group** — creates an order-group (folder icon). Selected layers (if any) are moved into the new group.  
-- **Delete group** — removes the selected group and **promotes** its children to the group’s former position.  
-- Tree:
-  - **Folder icon** = order group  
-  - **Layer-type icon** = map layer (point / line / polygon / raster / … via QGIS theme icons)  
-- Drag and drop to reorder layers and groups.  
-- **Ctrl+Z** / **Ctrl+Y** (or **Ctrl+Shift+Z**) — undo / redo when the dock has focus.
+Checkbox at the bottom of the panel (same idea as the stock **Layer Order** panel).
 
-### 4.2 How order is applied
+- **Checked** — panel drives `customLayerOrder`; tree and tools enabled.
+- **Unchecked** — custom order off; tree and group tools greyed out and non-interactive.
+
+### 4.1 Toolbar
+
+Icon-only buttons (Layers-panel style):
+
+| Button | Action |
+|--------|--------|
+| **Create group** | New order-group. Selected items (if any) are moved into it. Default name is unique (`New group`, `New group 2`, …). |
+| **Rename group** | Enabled when **exactly one** group is selected. Opens a name dialog. |
+| **Delete group** | Enabled when **one or more** groups are selected. Deletes **all** selected groups; children are promoted in place. |
+
+### 4.2 Tree and icons
+
+| Node | Icon | Interaction |
+|------|------|-------------|
+| Order group | Folder (bundled SVG) | Double-click → **expand/collapse** only (no inline rename) |
+| Layer | Type icon (QGIS / bundled SVG by geometry) | Double-click → no-op |
+
+### 4.3 Context menu (right-click)
+
+- **Create group**  
+- **Rename group** — enabled only if exactly one group is selected  
+- **Delete group** — enabled if at least one group is selected  
+
+### 4.4 Drag and drop
+
+| Drop | Result |
+|------|--------|
+| **On a group** | Move item(s) to the **top** of that group |
+| **On a layer** | Create a **new group** (unique default name), put the **target layer** and the **dropped item(s)** inside it, expand the group and ancestors |
+| **Above / below** | Reorder among siblings |
+
+Safeguards: cannot drop onto a descendant; cannot drop “on” an item that is itself being moved.
+
+### 4.5 Undo / redo
+
+- History lives on the panel’s `QUndoStack`.  
+- **Edit → Undo layer order / Redo layer order** when the panel is visible and **no** vector layer is in edit mode.  
+- Shortcuts: **Ctrl+Z**, **Ctrl+Y**, **Ctrl+Shift+Z** under the same rules; also work with focus in the dock.  
+- While a layer is being digitized, QGIS feature undo keeps priority.  
+- Undo restores **both** the panel tree **and** the map `customLayerOrder`.
+
+### 4.6 How order is applied
 
 1. The tree is flattened depth-first (group children in order, nested groups included).  
-2. That list is written to:
+2. That list is written with:
 
    ```text
-   QgsProject.instance().layerTreeRoot().setHasCustomLayerOrder(True)
+   root.setHasCustomLayerOrder(True)
    root.setCustomLayerOrder(list_of_layers)
    ```
 
-3. The map canvas uses this list as Z-order (first = top).
+3. Apply is debounced; undo uses a forced immediate apply.
 
-### 4.3 Drop rules
+### 4.7 Persistence
 
-| Drop indicator | Effect |
-|----------------|--------|
-| **On** a group | Move selection to the **top** of that group |
-| **On** a layer | Move selection **above** that layer (same parent) |
-| **Above** item | Insert above target (same parent) |
-| **Below** item | Insert below target (same parent) |
-
-Safeguards:
-
-- Cannot drop an item onto itself.  
-- Cannot drop a group onto one of its own descendants (no cycles).
-
-### 4.4 New layers
-
-When a layer is added to the project, it is inserted in the Plus tree relative to the **current selection (anchor)** when possible, instead of always at the bottom.
-
-### 4.5 Persistence
-
-The tree is stored in the project as:
+Stored in the project under:
 
 ```text
-Project entry key:  BetterLayerOrder / tree_json
+BetterLayerOrder / tree_json
 ```
 
-Saving the project keeps groups and order. Reopening the project restores the panel tree and reapplies custom layer order.
+JSON shape (simplified):
 
-### 4.6 Relationship to stock Layer Order
-
-Both panels drive the same underlying `customLayerOrder`. Changes in Layer Order Plus update that list; the stock panel should show the same flat sequence (without Plus groups).
-
----
-
-## 5. Developer notes
-
-### 5.1 File layout
-
-```text
-layer_order_plus_qgis4/
-├── __init__.py          # classFactory
-├── plugin.py            # lifecycle, project I/O, signals
-├── dock.py              # UI, tree, undo, apply, icons
-├── metadata.txt
-├── icon.png
-├── LICENSE
-└── docs/
-    ├── DOCUMENTATION.md
-    ├── TEST_SCENARIO.md
-    └── QUALITY_OVERHAUL.md
+```json
+{
+  "children": [
+    { "type": "group", "id": "grp_…", "name": "New group", "expanded": true, "children": [
+        { "type": "layer", "id": "<qgis-layer-id>" }
+    ]},
+    { "type": "layer", "id": "…" }
+  ]
+}
 ```
 
-### 5.2 Key classes
+Schema version field is not yet written (planned for 1.1.0).
 
-| Class | Role |
-|-------|------|
-| `BetterLayerOrderPlugin` | Menu action, dock registration, project read/write, layer add/remove signals |
-| `BetterLayerOrderDock` | Tree UI, groups, serialize, apply, undo stack |
-| `BetterLayerTree` | Custom `dropEvent` with ordering rules |
-| `TreeStateCommand` | `QUndoCommand` holding before/after JSON snapshots |
+---
 
-### 5.3 Apply path
+## 5. Version history (fork)
 
-```text
-User edit
-  → request_apply()          # debounced 50 ms (skipped if suspended / loading / in_undo)
-  → _apply_now()
-  → _apply_custom_order()    # setHasCustomLayerOrder(True) + setCustomLayerOrder(...)
+| Version | Notes |
+|---------|--------|
+| **1.0.0** | Upstream original (Samuel Kultz), QGIS 3-oriented |
+| **1.0.1–1.0.2** | PyQt6 imports and scoped enums |
+| **1.0.3** | Undo restores map order |
+| **1.0.4–1.0.7** | Icons (theme then bundled SVG), toolbar button style |
+| **1.0.8–1.0.10** | Edit-menu undo integration; `QUndoGroup` from QtGui |
+| **1.0.9** | Drop on layer → new group with both items |
+| **1.0.11** | Unique group names; expand group + ancestors after drop |
+| **1.0.14** | Rename via toolbar/context; multi-delete; double-click expand only |
+| **1.1.0** | *(planned)* after test validation |
 
-Undo
-  → TreeStateCommand.undo/redo
-  → _apply_tree_state_from_undo(json)
-  → load_from_project(json)  # rebuild tree
-  → _apply_now_force()       # bypass guards, apply order immediately
+Single source of truth: root file `VERSION` (synced into `metadata.txt` by `make sync`).
+
+---
+
+## 6. Build and CI
+
+```bash
+make show-version
+make check          # scripts/check_plugin.py
+make zip            # dist/layer_order_plus_qgis4-<VERSION>.zip
 ```
 
-### 5.4 Icons
-
-```python
-_icon_group()       # QgsApplication.getThemeIcon("/mIconFolder.svg")
-_icon_for_layer(l)  # QgsIconUtils.iconForLayer(layer)
-```
-
-Set on every group/layer item at creation time.
-
-### 5.5 Qt6 notes
-
-This fork expects PyQt6-style APIs, for example:
-
-- `Qt.ItemDataRole.UserRole`
-- `Qt.ItemFlag.ItemIsEditable`
-- `QAbstractItemView.DropIndicatorPosition.OnItem`
-- `QKeySequence.StandardKey.Undo`
-- `Qt.DockWidgetArea.LeftDockWidgetArea`
-- `QUndoCommand` / `QUndoStack` from `QtGui`
-- `QAction` from `QtGui`
-
-### 5.6 Extension points
-
-Useful places to extend:
-
-- `_flatten_to_qgs_layers` — change flatten strategy  
-- `_apply_custom_order` — extra side effects on apply  
-- `on_layers_added` / `on_layers_removed` — placement policy  
-- `_serialize_tree` / `load_from_project` — persistence format (add `"version"` when changing schema)
+GitHub Actions on push/PR: metadata/VERSION/syntax/Qt6 pattern checks + zip artifact.
 
 ---
 
-## 6. Known limitations
+## 7. Developer notes
 
-1. Order groups are **UI-only**; they do not create `QgsLayerTreeGroup` nodes.  
-2. No per-layer visibility toggles in this panel (use Layers panel).  
-3. Layer **rename** in the Layers panel is not yet reflected in the Plus tree until reload.  
-4. Empty groups are kept after all children are removed.  
-5. Undo shortcuts may require the dock to have focus.  
-6. QGIS 3 is not supported by this fork without further shims.  
-7. Possible double undo entries if both custom `dropEvent` and `rowsMoved` fire (see quality overhaul Phase 1.1).
+| Module | Role |
+|--------|------|
+| `plugin.py` | Dock lifecycle, project load/save, Edit-menu undo integration |
+| `dock.py` | Tree UI, drop rules, groups, apply custom order, local undo stack |
+| `icons/` | Bundled SVGs (always available without theme) |
+| `scripts/check_plugin.py` | CI validation without QGIS runtime |
 
-See **QUALITY_OVERHAUL.md** for the planned fixes.
-
----
-
-## 7. Changelog (this fork)
-
-### 1.0.5
-
-- Makefile + `VERSION` file as single source of truth; zip named `layer_order_plus_qgis4-<version>.zip`.
-
-### 1.0.4
-
-- Group folder icons + real layer-type icons; docs suite.
-
-### 1.0.3
-
-- Fix: undo restored the panel tree but not the map rendering order.  
-- Icons: folder for groups; `QgsIconUtils.iconForLayer` for layers.  
-- Docs: test scenario, quality overhaul, full documentation.
-
-### 1.0.2
-
-- Full Qt6 enum migration.
-
-### 1.0.1
-
-- `QUndoCommand` / `QUndoStack` import fix for PyQt6.  
-- `qgisMaximumVersion=4.99.0`.
-
-### 1.0.0 (upstream)
-
-- Initial release: groups + sync with Layer Order.  
-- Visibility not implemented.
+Known gaps (see `QUALITY_OVERHAUL.md`): dual undo on some drags, initial order seed, layer rename sync from Layers panel, JSON schema version, visibility toggles.
 
 ---
 
-## 8. License
+## 8. Credits and license
 
-MIT (see `LICENSE`). Original copyright Samuel Kultz; fork modifications as documented above.
-
----
-
-## 9. Links
-
-- Upstream: https://github.com/samkultz/layer_order_plus_plugin  
-- Plugin directory (upstream): https://plugins.qgis.org/plugins/layer_order_plus/  
-- QGIS custom layer order API: `QgsLayerTree.setCustomLayerOrder` / `setHasCustomLayerOrder`
+- **Original (v1.0.0):** Samuel Kultz — https://github.com/samkultz/layer_order_plus_plugin  
+- **This fork:** Sylvain Souche — https://github.com/SylvainSouche/layer_order_plus_plugin  
+- **License:** MIT — see `LICENSE`

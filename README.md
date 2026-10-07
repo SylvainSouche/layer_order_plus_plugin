@@ -77,7 +77,7 @@ Without these, the plugin fails to load on QGIS 4 with errors such as missing `Q
 | **1.0.2** | Full Qt6 enum migration. |
 | **1.0.3** | Undo restores **map** custom layer order, not only the tree UI. |
 | **1.0.4** | Group folder + layer type icons; documentation suite. |
-| **1.0.5** | `VERSION` + `Makefile`; versioned zip name. **Current.** |
+| **1.0.12** | `VERSION` + `Makefile`; versioned zip name. **Current.** |
 | **1.1.0** | *(planned)* After validation of the test scenario; cleanup items in the quality overhaul plan. |
 
 Always read the number in [`VERSION`](VERSION) and the `version=` field in `metadata.txt` (kept in sync by `make sync`).

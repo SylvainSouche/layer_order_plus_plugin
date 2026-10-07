@@ -19,6 +19,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
     QInputDialog,
     QMenu,
+    QCheckBox,
 )
 
 from qgis.core import QgsProject, QgsApplication, QgsIconUtils, QgsMapLayer, QgsVectorLayer
@@ -63,10 +64,44 @@ def _unique_group_name(tree: QTreeWidget, base: str = "New group") -> str:
 
 def _expand_item_and_ancestors(item: QTreeWidgetItem):
     """Expand item and every parent so the new group is visible."""
+    if item is None:
+        return
+    try:
+        if item.treeWidget() is None:
+            return
+    except RuntimeError:
+        return
     cur = item
     while cur is not None:
-        cur.setExpanded(True)
-        cur = cur.parent()
+        try:
+            cur.setExpanded(True)
+            cur = cur.parent()
+        except RuntimeError:
+            break
+
+
+def _find_group_item(tree: QTreeWidget, group_id: str):
+    """Find a group QTreeWidgetItem by ROLE_ID (safe after async callbacks)."""
+    if not group_id:
+        return None
+
+    def walk(it):
+        try:
+            if it.data(0, ROLE_TYPE) == TYPE_GROUP and it.data(0, ROLE_ID) == group_id:
+                return it
+            for i in range(it.childCount()):
+                found = walk(it.child(i))
+                if found is not None:
+                    return found
+        except RuntimeError:
+            return None
+        return None
+
+    for i in range(tree.topLevelItemCount()):
+        found = walk(tree.topLevelItem(i))
+        if found is not None:
+            return found
+    return None
 
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -361,14 +396,24 @@ class BetterLayerTree(QTreeWidget):
                 grp.setSelected(True)
                 self.setCurrentItem(grp)
 
-                # Expand now and again after Qt finishes the drop (avoids collapse)
+                # Expand now and again after Qt finishes the drop (avoids collapse).
+                # Use group id — the QTreeWidgetItem pointer can be invalidated if
+                # another handler rebuilds/touches the tree before the timer fires.
+                group_id = grp.data(0, ROLE_ID)
                 _expand_item_and_ancestors(grp)
 
-                def _keep_expanded(g=grp):
-                    setattr(self, "_just_custom_dropped", False)
-                    if g is not None:
-                        _expand_item_and_ancestors(g)
-                        self.scrollToItem(g)
+                def _keep_expanded(gid=group_id, tree=self):
+                    setattr(tree, "_just_custom_dropped", False)
+                    try:
+                        item = _find_group_item(tree, gid)
+                        if item is not None:
+                            _expand_item_and_ancestors(item)
+                            tree.scrollToItem(item)
+                            tree.clearSelection()
+                            item.setSelected(True)
+                            tree.setCurrentItem(item)
+                    except RuntimeError:
+                        pass
 
                 e.accept()
                 after = self._state_provider()
@@ -485,6 +530,13 @@ class BetterLayerOrderDock(QDockWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lay.addWidget(self.tree)
 
+        self.chk_control = QCheckBox("Control rendering order")
+        self.chk_control.setToolTip(
+            "When checked, this panel drives the map draw order (custom layer order). "
+            "When unchecked, QGIS uses the default Layers-panel order."
+        )
+        lay.addWidget(self.chk_control)
+
         # Local shortcuts when the dock has focus (plugin also hooks Edit menu / app shortcuts)
         for seq, slot in (
             (QKeySequence.StandardKey.Undo, self.undo_stack.undo),
@@ -502,6 +554,7 @@ class BetterLayerOrderDock(QDockWidget):
         self.btn_add_group.clicked.connect(self.create_group_from_selection)
         self.btn_rename_group.clicked.connect(self.rename_selected_group)
         self.btn_del_group.clicked.connect(self.delete_selected_groups)
+        self.chk_control.toggled.connect(self._on_control_toggled)
 
         self.tree.model().rowsMoved.connect(self._on_rows_moved)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
@@ -512,6 +565,47 @@ class BetterLayerOrderDock(QDockWidget):
         self.tree.currentItemChanged.connect(self._capture_anchor_from_current)
 
         self._update_group_actions_enabled()
+        self._sync_control_from_project()
+
+    # ==================================================================
+    # control rendering order (stock Layer Order parity)
+    # ==================================================================
+    def is_control_enabled(self) -> bool:
+        return bool(self.chk_control.isChecked())
+
+    def _sync_control_from_project(self):
+        root = QgsProject.instance().layerTreeRoot()
+        checked = bool(root.hasCustomLayerOrder())
+        self.chk_control.blockSignals(True)
+        self.chk_control.setChecked(checked)
+        self.chk_control.blockSignals(False)
+        self._apply_control_ui_state(checked)
+
+    def _on_control_toggled(self, checked: bool):
+        if self._loading:
+            self._apply_control_ui_state(checked)
+            return
+        root = QgsProject.instance().layerTreeRoot()
+        if checked:
+            root.setHasCustomLayerOrder(True)
+            self._apply_now_force()
+        else:
+            root.setHasCustomLayerOrder(False)
+        self._apply_control_ui_state(checked)
+        try:
+            QgsProject.instance().setDirty(True)
+        except Exception:
+            pass
+
+    def _apply_control_ui_state(self, enabled: bool):
+        self.tree.setEnabled(enabled)
+        self.btn_add_group.setEnabled(enabled)
+        if enabled:
+            self._update_group_actions_enabled()
+        else:
+            self.btn_rename_group.setEnabled(False)
+            self.btn_del_group.setEnabled(False)
+        self.tree.setStyleSheet("" if enabled else "QTreeWidget { color: palette(disabled); }")
 
     # ==================================================================
     # external control
@@ -685,6 +779,8 @@ class BetterLayerOrderDock(QDockWidget):
     # group operations (FIXES THE CRASH)
     # ==================================================================
     def create_group_from_selection(self):
+        if not self.is_control_enabled():
+            return
         before = self._snapshot or self._serialize_tree()
 
         default_name = _unique_group_name(self.tree, "New group")
@@ -771,6 +867,8 @@ class BetterLayerOrderDock(QDockWidget):
             insert_at += 1
 
     def delete_selected_groups(self):
+        if not self.is_control_enabled():
+            return
         groups = self._selected_groups()
         if not groups:
             return
@@ -793,6 +891,8 @@ class BetterLayerOrderDock(QDockWidget):
         self._update_group_actions_enabled()
 
     def rename_selected_group(self):
+        if not self.is_control_enabled():
+            return
         groups = self._selected_groups()
         if len(groups) != 1:
             return
@@ -816,6 +916,8 @@ class BetterLayerOrderDock(QDockWidget):
         self._autosave()
 
     def _on_item_double_clicked(self, item, column):
+        if not self.is_control_enabled():
+            return
         if item is None:
             return
         if item.data(0, ROLE_TYPE) == TYPE_GROUP:
@@ -823,6 +925,8 @@ class BetterLayerOrderDock(QDockWidget):
         # layers: do nothing (no rename, no toggle)
 
     def _on_tree_context_menu(self, pos):
+        if not self.is_control_enabled():
+            return
         menu = QMenu(self)
         act_create = menu.addAction(_icon_add_group(), "Create group")
         act_rename = menu.addAction(_icon_rename_group(), "Rename group")
@@ -934,6 +1038,7 @@ class BetterLayerOrderDock(QDockWidget):
         finally:
             self.tree.blockSignals(False)
             self._loading = False
+            self._sync_control_from_project()
 
     # ==================================================================
     # layer add/remove (ANCHOR-BASED)
@@ -1029,9 +1134,11 @@ class BetterLayerOrderDock(QDockWidget):
 
     def _apply_custom_order(self):
         root = QgsProject.instance().layerTreeRoot()
+        if not self.is_control_enabled():
+            # Panel must not force custom order while the checkbox is off
+            root.setHasCustomLayerOrder(False)
+            return
         layers = self._flatten_to_qgs_layers()
-        # Keep custom order active once the panel has been used; empty list
-        # still means "custom order on, nothing drawn from this panel".
         root.setHasCustomLayerOrder(True)
         root.setCustomLayerOrder(layers)
 
@@ -1044,6 +1151,8 @@ class BetterLayerOrderDock(QDockWidget):
     # events (undo hooks)
     # ==================================================================
     def _on_rows_moved(self, *args, **kwargs):
+        if not self.is_control_enabled():
+            return
         if self._in_undo or self._loading:
             return
         # InternalMove not always triggers our custom drop path; take snapshot-based undo.
@@ -1076,6 +1185,8 @@ class BetterLayerOrderDock(QDockWidget):
             self._in_undo = False
 
     def _on_tree_changed_external(self, before_json: str, after_json: str):
+        if not self.is_control_enabled():
+            return
         if self._in_undo or self._loading:
             return
 
