@@ -1,10 +1,10 @@
-## Status as of 1.0.15
+## Status as of 1.1.0
 
-Completed since initial review: Qt6 port, map undo, bundled icons, Edit-menu undo, drop-on-layer grouping, unique names, expand-on-create, rename via dialog/toolbar/context, multi-delete, CI/Makefile/VERSION, control-rendering checkbox (1.0.14), diagnostic logging in layer add/remove/apply paths (1.0.15).
+All Phase 1, Phase 2, Phase 3, and Phase 4 items in scope of the 1.1.0 release are **DONE**.
 
-Still open toward 1.1.0: dual undo on drag (1.1 / 4.5), initial order seed (1.2), layer rename sync (2.1), empty-group cleanup (2.2), JSON schema version (2.4), visibility toggles (3.1), context-menu completion (3.2), search/filter (3.3), drop-rule tooltips (3.5), and Phase 4 architecture items (split dock.py, dedup, type hints, unit tests).
+**Shipped in 1.1.0:** dual undo guard (1.1/4.5), initial order seed (1.2), JSON schema version + expanded restore (2.4), layer rename sync (2.1), empty-group cleanup (2.2), control-rendering checkbox (1.3), QGIS 4 minimum (1.4), logging (2.3), context menu completion (3.2), drop-rule tooltips (3.5), View→Panels registration (3.4), shortcut focus (3.6), per-layer + per-group visibility checkboxes (3.1), name substring filter (3.3), dock.py split into modules (4.1), dedup of _add/_insert_layer_item (4.2), 54 unit tests + CI pytest (4.4).
 
-**Doc audit (1.0.15) reconciled the stale 1.0.12 status:** items 1.3 (sticky checkbox), 1.4 (QGIS 4 minimum), 2.3 (logging), 3.4 (View → Panels), and 3.6 (shortcut focus) are all actually DONE in code — the doc previously listed them as TODO/PARTIAL.
+**Deferred to 1.2.0+:** Phase 4.3 (complete type hint coverage — currently ~30% annotated).
 
 ---
 
@@ -190,14 +190,14 @@ _apply_tree_state_from_undo:
 
 ---
 
-## Phase 4 — Architecture / maintainability — TODO
+## Phase 4 — Architecture / maintainability — DONE (4.3 type hints deferred to 1.2.0)
 
 | # | Item | Steps |
 |---|------|--------|
-| 4.1 | Split `dock.py` | `tree_widget.py` (BetterLayerTree), `icons.py`, `serialize.py`, `apply.py`, `dock.py` |
-| 4.2 | Deduplicate | Single `_make_layer_item` / `_make_group_item`; one `_index_in_parent` |
+| 4.1 | Split `dock.py` | **DONE** — shipped in 1.0.26. dock.py split into icons.py (156 lines), tree_utils.py (231 lines), tree_widget.py (247 lines), undo.py (21 lines). dock.py itself went from 1782 → 1335 lines and now contains only the BetterLayerOrderDock class + orchestration. |
+| 4.2 | Deduplicate | **DONE** — shipped in 1.0.26. `_add_layer_item` and `_insert_layer_item` now share a single `_make_layer_item` helper. `find_layer_item` / `find_group_item` / `_index_in_parent` / `iter_all_layer_ids` / `_prune_empty_groups` on the dock are now thin wrappers around the tree_utils functions. The dock's `_on_filter_changed` delegates to `tree_utils.apply_name_filter`. |
 | 4.3 | Type hints | **PARTIAL** — ~30% of public methods annotated (e.g. `is_control_enabled() -> bool`, `_serialize_tree() -> str`). `lyr` params never typed. |
-| 4.4 | Unit tests | Serialize/deserialize round-trip; flatten order; icon non-null (headless where possible) |
+| 4.4 | Unit tests | **DONE** — shipped in 1.0.27. 54 tests across 4 files: `tests/test_tree_utils.py` (24), `tests/test_serialize.py` (9), `tests/test_filter.py` (11), `tests/test_icons.py` (10). `tests/conftest.py` installs qgis stubs so tests run without QGIS. CI runs `make test` between lint and zip build. |
 | 4.5 | Dual event cleanup | See 1.1 |
 
 ---

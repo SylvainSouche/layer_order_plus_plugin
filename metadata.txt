@@ -4,7 +4,7 @@ qgisMinimumVersion=4.0.0
 qgisMaximumVersion=4.99.0
 description=Layer Order panel with grouping (QGIS 4 / PyQt6 fork)
 about=Alternative to the Layer Order panel with order groups. Fork of the original Layer Order Plus 1.0.0 for QGIS 4: PyQt6 imports/enums, undo restores map draw order, folder and layer-type icons. Groups are for ordering only (not Layers-panel groups).
-version=1.0.27
+version=1.1.0
 author=Samuel Kultz (original); Sylvain Souche (QGIS 4 fork)
 email=samkultz@me.com
 category=Productivity
@@ -14,10 +14,11 @@ repository=https://github.com/SylvainSouche/layer_order_plus_plugin
 tracker=https://github.com/SylvainSouche/layer_order_plus_plugin/issues
 icon=icon.png
 hasProcessingProvider=no
-experimental=True
+experimental=False
 deprecated=False
 server=False
 changelog=
+    1.1.0: All QualityOverhaul Phase 1+2+3+4 items shipped — refactor + 54 unit tests included
     1.0.27: Unit tests (54 tests across tree_utils / serialize / filter / icons) + CI runs pytest + Makefile test target (closes QualityOverhaul 4.4)
     1.0.26: Refactor dock.py into icons.py / tree_utils.py / tree_widget.py / undo.py; dedup _add/_insert_layer_item (closes QualityOverhaul 4.1, 4.2)
     1.0.25: Name substring filter field (closes QualityOverhaul 3.3)
