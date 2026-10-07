@@ -1,7 +1,7 @@
 # plugin.py
 from qgis.PyQt.QtCore import QObject, Qt, QTimer, QEvent
 from qgis.PyQt.QtGui import QAction, QKeySequence
-from qgis.PyQt.QtWidgets import QUndoGroup
+from qgis.PyQt.QtGui import QUndoGroup
 from qgis.core import QgsProject, QgsMapLayer
 
 from .dock import BetterLayerOrderDock
