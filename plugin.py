@@ -71,6 +71,7 @@ class BetterLayerOrderPlugin(QObject):
             self._save_tree_json(self.dock._serialize_tree())
             try:
                 self.dock._disconnect_all_layer_renames()
+                self.dock._disconnect_all_layer_visibilities()
             except Exception:
                 pass
             self.dock.deleteLater()
