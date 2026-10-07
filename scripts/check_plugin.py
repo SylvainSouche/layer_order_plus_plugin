@@ -98,7 +98,7 @@ def check_qt6_patterns() -> None:
             continue
         text = path.read_text(encoding="utf-8")
         if re.search(
-            r"from\s+qgis\.PyQt\.QtWidgets\s+import\s+\([^)]*QUndo(Command|Stack)",
+            r"from\s+qgis\.PyQt\.QtWidgets\s+import\s+\([^)]*QUndo(Command|Stack|Group)",
             text,
             re.S,
         ):
