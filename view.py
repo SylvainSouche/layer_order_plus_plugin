@@ -83,6 +83,11 @@ class LayerOrderView(QDockWidget):
     item_double_clicked = pyqtSignal(str)             # item_id (group only — toggle expand)
     # drop_intent(moving_ids, target_id, position) — from BetterLayerTree
     drop_intent = pyqtSignal(list, str, str)
+    # Local dock shortcuts (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z) — re-emitted so
+    # plugin.py / ViewController can connect without touching the QShortcut
+    # objects directly.
+    undo_shortcut_activated = pyqtSignal()
+    redo_shortcut_activated = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__("Layer Order Plus", parent)
@@ -166,19 +171,22 @@ class LayerOrderView(QDockWidget):
         )
         lay.addWidget(self.chk_remove_empty)
 
-        # Local shortcuts (plugin.py also hooks Edit menu / app shortcuts)
+        # Local shortcuts (plugin.py also hooks Edit menu / app shortcuts).
+        # The undo/redo QShortcut.activated signals are connected to the
+        # class-level undo_shortcut_activated / redo_shortcut_activated
+        # pyqtSignals so plugin.py / ViewController can listen without
+        # touching the QShortcut objects directly.
         self._shortcuts = []
         for seq in (QKeySequence.StandardKey.Undo, QKeySequence.StandardKey.Redo,
                     QKeySequence("Ctrl+Shift+Z")):
             sc = QShortcut(seq, self)
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self._shortcuts.append(sc)
-        # Wire undo/redo shortcuts to signals so the ViewController/plugin can connect
-        self.undo_shortcut_activated = pyqtSignal()
-        self.redo_shortcut_activated = pyqtSignal()
-        self._shortcuts[0].activated.connect(self.undo_shortcut_activated.emit)
-        self._shortcuts[1].activated.connect(self.redo_shortcut_activated.emit)
-        self._shortcuts[2].activated.connect(self.redo_shortcut_activated.emit)
+        # Connect shortcut.activated → re-emit through class-level signals.
+        # (Direct signal-to-signal connection: PyQt handles the emit.)
+        self._shortcuts[0].activated.connect(self.undo_shortcut_activated)
+        self._shortcuts[1].activated.connect(self.redo_shortcut_activated)
+        self._shortcuts[2].activated.connect(self.redo_shortcut_activated)
 
     def _connect_signals(self):
         self.btn_add_group.clicked.connect(self.create_group_requested.emit)
