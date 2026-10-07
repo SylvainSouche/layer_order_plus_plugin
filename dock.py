@@ -11,7 +11,7 @@ import os
 import traceback
 
 from qgis.PyQt.QtCore import Qt, QTimer, QSize
-from qgis.PyQt.QtGui import QKeySequence, QUndoStack
+from qgis.PyQt.QtGui import QKeySequence, QShortcut, QUndoStack
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -19,7 +19,6 @@ from qgis.PyQt.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QPushButton,
-    QShortcut,
     QStyle,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -51,6 +50,7 @@ from .tree_utils import (
     iter_all_layer_ids,
     index_in_parent,
     prune_empty_groups,
+    apply_name_filter,
 )
 from .icons import (
     icon_group,
@@ -338,56 +338,10 @@ class BetterLayerOrderDock(QDockWidget):
     # name filter (QualityOverhaul 3.3)
     # ==================================================================
     def _on_filter_changed(self, text: str):
-        """Case-insensitive substring filter on layer/group names.
-
-        Items are hidden (setHidden), not removed, so the tree state and undo
-        stack are unaffected. A group is shown if it matches OR any descendant
-        matches; groups that match are expanded so the match is visible.
-        """
-        needle = (text or "").strip().lower()
-        if not needle:
-            # Restore: clear hidden on every item
-            def unhide(it):
-                try:
-                    it.setHidden(False)
-                except RuntimeError:
-                    return
-                for i in range(it.childCount()):
-                    unhide(it.child(i))
-            for i in range(self.tree.topLevelItemCount()):
-                unhide(self.tree.topLevelItem(i))
-            return
-
-        def matches(it):
-            try:
-                return needle in (it.text(0) or "").lower()
-            except RuntimeError:
-                return False
-
-        def filter_walk(it):
-            """Return True if `it` or any descendant matches; set hidden accordingly."""
-            try:
-                self_match = matches(it)
-            except RuntimeError:
-                return False
-            any_descendant_match = False
-            for i in range(it.childCount()):
-                if filter_walk(it.child(i)):
-                    any_descendant_match = True
-            should_show = self_match or any_descendant_match
-            try:
-                it.setHidden(not should_show)
-                # Expand matching groups so descendants are visible
-                if should_show and not self_match and any_descendant_match:
-                    it.setExpanded(True)
-            except RuntimeError:
-                pass
-            return should_show
-
+        """Case-insensitive substring filter — delegates to tree_utils.apply_name_filter."""
         self.tree.blockSignals(True)
         try:
-            for i in range(self.tree.topLevelItemCount()):
-                filter_walk(self.tree.topLevelItem(i))
+            apply_name_filter(self.tree, text)
         finally:
             self.tree.blockSignals(False)
 
