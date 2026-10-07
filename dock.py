@@ -551,6 +551,17 @@ class BetterLayerOrderDock(QDockWidget):
 
         self.tree = BetterLayerTree()
         self.tree.setHeaderHidden(True)
+        # QualityOverhaul 3.5: explain drop rules to the user.
+        self.tree.setToolTip(
+            "Drag layers and groups to set draw order (top of tree = drawn on top).\n\n"
+            "Drop rules:\n"
+            "  • Drop ON a layer → creates a new group containing the target layer and the dropped items\n"
+            "  • Drop ON a group → moves the dropped items into that group (top)\n"
+            "  • Drop ABOVE an item → reorders just above that item\n"
+            "  • Drop BELOW an item → reorders just below that item\n\n"
+            "Right-click for: Create / Rename / Delete group, Expand / Collapse, Move to top / bottom.\n"
+            "Double-click a group to expand or collapse it."
+        )
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setDragEnabled(True)
         self.tree.setAcceptDrops(True)
