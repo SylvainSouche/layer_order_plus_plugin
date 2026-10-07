@@ -3,7 +3,7 @@ import json
 import uuid
 
 from qgis.PyQt.QtCore import Qt, QTimer
-from qgis.PyQt.QtGui import QDropEvent, QKeySequence
+from qgis.PyQt.QtGui import QDropEvent, QKeySequence, QUndoCommand, QUndoStack
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
@@ -14,23 +14,43 @@ from qgis.PyQt.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
-    QUndoCommand,
-    QUndoStack,
     QInputDialog,
 )
 
-from qgis.core import QgsProject
+from qgis.core import QgsProject, QgsApplication, QgsIconUtils, QgsMapLayer
 
 
-ROLE_TYPE = Qt.UserRole + 1   # "group" | "layer"
-ROLE_ID   = Qt.UserRole + 2   # group_id | layer_id
+ROLE_TYPE = Qt.ItemDataRole.UserRole + 1   # "group" | "layer"
+ROLE_ID   = Qt.ItemDataRole.UserRole + 2   # group_id | layer_id
 
 TYPE_GROUP = "group"
 TYPE_LAYER = "layer"
 
 
+
 def _new_group_id():
     return "grp_" + uuid.uuid4().hex[:10]
+
+
+def _icon_group():
+    """Folder icon for order-groups (UI only, not Layers-panel groups)."""
+    icon = QgsApplication.getThemeIcon("/mIconFolder.svg")
+    if icon.isNull():
+        icon = QgsApplication.getThemeIcon("mIconFolder.svg")
+    return icon
+
+
+def _icon_for_layer(layer):
+    """Real QGIS layer-type icon (point/line/polygon/raster/…)."""
+    if layer is None:
+        return QgsApplication.getThemeIcon("/mIconLayer.png")
+    try:
+        icon = QgsIconUtils.iconForLayer(layer)
+        if icon is not None and not icon.isNull():
+            return icon
+    except Exception:
+        pass
+    return QgsApplication.getThemeIcon("/mIconLayer.png")
 
 
 class TreeStateCommand(QUndoCommand):
@@ -110,7 +130,7 @@ class BetterLayerTree(QTreeWidget):
         p = self._event_pos_point(e)
         pos = self.dropIndicatorPosition()
 
-        if pos in (QAbstractItemView.OnItem, QAbstractItemView.AboveItem, QAbstractItemView.BelowItem):
+        if pos in (QAbstractItemView.DropIndicatorPosition.OnItem, QAbstractItemView.DropIndicatorPosition.AboveItem, QAbstractItemView.DropIndicatorPosition.BelowItem):
             target = self.itemAt(p)
             if target is None or not self._state_provider:
                 super().dropEvent(e)
@@ -128,7 +148,7 @@ class BetterLayerTree(QTreeWidget):
 
             moving_ids = {id(x) for x in moving}
 
-            if pos == QAbstractItemView.OnItem and id(target) in moving_ids:
+            if pos == QAbstractItemView.DropIndicatorPosition.OnItem and id(target) in moving_ids:
                 e.ignore()
                 return
 
@@ -139,14 +159,14 @@ class BetterLayerTree(QTreeWidget):
 
             tt = target.data(0, ROLE_TYPE)
 
-            if pos == QAbstractItemView.OnItem:
+            if pos == QAbstractItemView.DropIndicatorPosition.OnItem:
                 if tt == TYPE_GROUP:
                     dest_parent = target
                     dest_index = 0
                 else:
                     dest_parent = target.parent()
                     dest_index = self._index_in_parent(target)
-            elif pos == QAbstractItemView.AboveItem:
+            elif pos == QAbstractItemView.DropIndicatorPosition.AboveItem:
                 dest_parent = target.parent()
                 dest_index = self._index_in_parent(target)
             else:  # BelowItem
@@ -233,16 +253,16 @@ class BetterLayerOrderDock(QDockWidget):
 
         self.tree = BetterLayerTree()
         self.tree.setHeaderHidden(True)
-        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setDragEnabled(True)
         self.tree.setAcceptDrops(True)
         self.tree.setDropIndicatorShown(True)
-        self.tree.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         lay.addWidget(self.tree)
 
         # shortcuts
-        QShortcut(QKeySequence.Undo, self, activated=self.undo_stack.undo)
-        QShortcut(QKeySequence.Redo, self, activated=self.undo_stack.redo)
+        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo_stack.undo)
+        QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.undo_stack.redo)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self.undo_stack.redo)
 
         # tree callbacks
@@ -395,7 +415,8 @@ class BetterLayerOrderDock(QDockWidget):
         it = QTreeWidgetItem([lyr.name()])
         it.setData(0, ROLE_TYPE, TYPE_LAYER)
         it.setData(0, ROLE_ID, lyr.id())
-        it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+        it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        it.setIcon(0, _icon_for_layer(lyr))
         if parent is None:
             self.tree.addTopLevelItem(it)
         else:
@@ -406,7 +427,8 @@ class BetterLayerOrderDock(QDockWidget):
         it = QTreeWidgetItem([lyr.name()])
         it.setData(0, ROLE_TYPE, TYPE_LAYER)
         it.setData(0, ROLE_ID, lyr.id())
-        it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+        it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        it.setIcon(0, _icon_for_layer(lyr))
         if parent is None:
             self.tree.insertTopLevelItem(idx, it)
         else:
@@ -444,7 +466,8 @@ class BetterLayerOrderDock(QDockWidget):
         grp = QTreeWidgetItem([name])
         grp.setData(0, ROLE_TYPE, TYPE_GROUP)
         grp.setData(0, ROLE_ID, _new_group_id())
-        grp.setFlags(grp.flags() | Qt.ItemIsEditable)
+        grp.setFlags(grp.flags() | Qt.ItemFlag.ItemIsEditable)
+        grp.setIcon(0, _icon_group())
 
         anchor = self._resolve_anchor_item()
         if anchor is not None:
@@ -565,7 +588,8 @@ class BetterLayerOrderDock(QDockWidget):
                     it = QTreeWidgetItem([node.get("name", "Group")])
                     it.setData(0, ROLE_TYPE, TYPE_GROUP)
                     it.setData(0, ROLE_ID, node.get("id", _new_group_id()))
-                    it.setFlags(it.flags() | Qt.ItemIsEditable)
+                    it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
+                    it.setIcon(0, _icon_group())
                     add_child(parent, it)
                     for ch in node.get("children", []):
                         build(it, ch)
@@ -660,6 +684,8 @@ class BetterLayerOrderDock(QDockWidget):
     # apply to QGIS
     # ==================================================================
     def request_apply(self):
+        # Normal path: debounce. Blocked during project load / suspend.
+        # Undo uses _apply_now_force() so order is restored immediately.
         if self._apply_suspended or self._loading or self._in_undo:
             return
         self._apply_timer.start(50)
@@ -667,15 +693,21 @@ class BetterLayerOrderDock(QDockWidget):
     def _apply_now(self):
         if self._apply_suspended or self._loading or self._in_undo:
             return
+        self._apply_custom_order()
 
+    def _apply_now_force(self):
+        """Apply custom layer order even during undo/loading guards."""
+        self._apply_custom_order()
+
+    def _apply_custom_order(self):
         root = QgsProject.instance().layerTreeRoot()
         layers = self._flatten_to_qgs_layers()
-        root.setHasCustomLayerOrder(bool(layers))
-        if layers:
-            root.setCustomLayerOrder(layers)
+        # Keep custom order active once the panel has been used; empty list
+        # still means "custom order on, nothing drawn from this panel".
+        root.setHasCustomLayerOrder(True)
+        root.setCustomLayerOrder(layers)
 
         try:
-            self.iface.layerTreeView().refresh()
             self.iface.mapCanvas().refresh()
         except Exception:
             pass
@@ -734,7 +766,9 @@ class BetterLayerOrderDock(QDockWidget):
         self._in_undo = True
         try:
             self.load_from_project(raw_json)
-            self.request_apply()
+            # request_apply() is a no-op while _in_undo is True — force apply
+            # so the map canvas order matches the restored tree.
+            self._apply_now_force()
             self._snapshot = self._serialize_tree()
         finally:
             self._in_undo = False

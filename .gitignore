@@ -1,4 +1,9 @@
-# Python bytecode
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
+.DS_Store
+*.zip
+.idea/
+.vscode/
+*.qgz
+*.qgs~
