@@ -8,14 +8,14 @@ from qgis.PyQt.QtGui import QUndoCommand
 
 
 class TreeStateCommand(QUndoCommand):
-    def __init__(self, dock, before_json: str, after_json: str, text: str):
+    def __init__(self, view_controller, before_json: str, after_json: str, text: str):
         super().__init__(text)
-        self._dock = dock
+        self._vc = dock
         self._before = before_json
         self._after = after_json
 
     def undo(self):
-        self._dock._apply_tree_state_from_undo(self._before)
+        self._vc._apply_tree_state_from_undo(self._before)
 
     def redo(self):
-        self._dock._apply_tree_state_from_undo(self._after)
+        self._vc._apply_tree_state_from_undo(self._after)

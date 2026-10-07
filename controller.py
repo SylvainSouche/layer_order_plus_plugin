@@ -21,15 +21,10 @@ from qgis.PyQt.QtGui import QIcon
 
 from qgis.core import (
     QgsProject,
-    QgsApplication,
-    QgsIconUtils,
-    QgsMapLayer,
-    QgsVectorLayer,
     QgsMessageLog,
     Qgis,
 )
 
-from .model import LayerOrderModel
 from .icons import icon_for_layer
 from .view import LayerOrderView
 
@@ -151,6 +146,15 @@ class LayerOrderController(QObject):
     # ==================================================================
     # Layer rename sync (QGIS layer.nameChanged → ViewController)
     # ==================================================================
+    def connect_layer(self, lyr):
+        """Public API: connect rename + visibility listeners for a layer.
+
+        Called by plugin.py on project load for every existing layer.
+        Idempotent — safe to call multiple times for the same layer.
+        """
+        self._connect_layer_rename(lyr)
+        self._connect_layer_visibility(lyr)
+
     def _connect_layer_rename(self, lyr):
         if lyr is None:
             return

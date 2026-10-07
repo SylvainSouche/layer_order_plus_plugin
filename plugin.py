@@ -28,7 +28,6 @@ from .model import LayerOrderModel
 from .view import LayerOrderView
 from .view_controller import ViewController
 from .controller import LayerOrderController
-from .tree_utils import TYPE_GROUP, TYPE_LAYER
 
 
 class BetterLayerOrderPlugin(QObject):
@@ -98,8 +97,11 @@ class BetterLayerOrderPlugin(QObject):
         self.view.undo_shortcut_activated.connect(self.view_controller.undo_stack.undo)
         self.view.redo_shortcut_activated.connect(self.view_controller.undo_stack.redo)
 
-        # Wire autosave — when the ViewController's Model changes, mark the project dirty
+        # Wire autosave — when the ViewController's Model changes, persist
+        # the tree to the project + mark dirty. This ensures tree changes
+        # survive a crash (not just a clean unload).
         self.view_controller.order_changed.connect(self._mark_dirty)
+        self.view_controller.save_requested.connect(self._save_tree_json)
 
         # Load the current project (deferred to next event loop)
         QTimer.singleShot(0, self._on_project_read)
@@ -194,8 +196,7 @@ class BetterLayerOrderPlugin(QObject):
 
             # Connect rename + visibility for all existing layers
             for lyr in QgsProject.instance().mapLayers().values():
-                self.controller._connect_layer_rename(lyr)
-                self.controller._connect_layer_visibility(lyr)
+                self.controller.connect_layer(lyr)
 
             # Sync checkboxes from QGIS
             self.controller.sync_state_from_project()
@@ -236,7 +237,12 @@ class BetterLayerOrderPlugin(QObject):
     # Undo integration with QGIS Edit menu
     # ==================================================================
     def _setup_undo_integration(self):
-        """Wire the ViewController's undo stack to QGIS Edit menu + app shortcuts."""
+        """Wire the ViewController's undo stack to QGIS Edit menu + app shortcuts.
+
+        Actions are added to BOTH the plugin menu AND the main window (so
+        ApplicationShortcut shortcuts fire) AND the Edit menu (so users
+        find them in the expected place).
+        """
         mw = self.iface.mainWindow()
 
         self._undo_group = QUndoGroup(self)
@@ -244,9 +250,9 @@ class BetterLayerOrderPlugin(QObject):
         self._undo_group.setActiveStack(self.view_controller.undo_stack)
 
         # Create Edit menu actions
-        self._act_undo = QAction("Undo layer order", self)
-        self._act_redo = QAction("Redo layer order", self)
-        self._act_redo_alt = QAction("Redo layer order", self)
+        self._act_undo = QAction("Undo layer order", mw)
+        self._act_redo = QAction("Redo layer order", mw)
+        self._act_redo_alt = QAction("Redo layer order", mw)
 
         self._act_undo.setShortcut(QKeySequence.StandardKey.Undo)
         self._act_undo.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
@@ -259,20 +265,58 @@ class BetterLayerOrderPlugin(QObject):
         self._act_redo.triggered.connect(self._redo_with_fallback)
         self._act_redo_alt.triggered.connect(self._redo_with_fallback)
 
+        # Add actions to the main window so ApplicationShortcut shortcuts fire
+        mw.addAction(self._act_undo)
+        mw.addAction(self._act_redo)
+        mw.addAction(self._act_redo_alt)
+
         # Install an event filter on the main window so we can intercept
-        # Ctrl+Z when no vector layer is being edited (otherwise QGIS digitizing
-        # undo takes priority).
+        # Ctrl+Z / Ctrl+Y when no vector layer is being edited (otherwise
+        # QGIS digitizing undo takes priority).
         mw.installEventFilter(self)
         self._filter_installed = True
 
+        # Add to plugin menu
         self.iface.addPluginToMenu("Layer Order Plus", self._act_undo)
         self.iface.addPluginToMenu("Layer Order Plus", self._act_redo)
+
+        # Also add to the Edit menu if available
+        self._add_to_edit_menu()
 
         self._refresh_undo_actions()
         self.view_controller.undo_stack.cleanChanged.connect(self._refresh_undo_actions)
         self.view_controller.undo_stack.indexChanged.connect(self._refresh_undo_actions)
         self.view_controller.undo_stack.canUndoChanged.connect(self._refresh_undo_actions)
         self.view_controller.undo_stack.canRedoChanged.connect(self._refresh_undo_actions)
+
+    def _find_edit_menu(self):
+        """Find QGIS's Edit menu (QMenuBar → 'Edit' / 'Édition' / etc.)."""
+        try:
+            mw = self.iface.mainWindow()
+            menubar = mw.menuBar()
+            for action in menubar.actions():
+                text = action.text().lower()
+                # Match 'edit' / 'édition' / 'edición' etc.
+                if "edit" in text or "édition" in text or "edición" in text:
+                    menu = action.menu()
+                    if menu is not None:
+                        return menu
+        except Exception:
+            pass
+        return None
+
+    def _add_to_edit_menu(self):
+        """Add Undo/Redo layer order actions to QGIS's Edit menu."""
+        edit_menu = self._find_edit_menu()
+        if edit_menu is None:
+            return
+        try:
+            edit_menu.addSeparator()
+            edit_menu.addAction(self._act_undo)
+            edit_menu.addAction(self._act_redo)
+            self._edit_menu = edit_menu  # remember for teardown
+        except Exception:
+            pass
 
     def _teardown_undo_integration(self):
         if self._filter_installed:
@@ -286,6 +330,11 @@ class BetterLayerOrderPlugin(QObject):
             if act is not None:
                 try:
                     self.iface.removePluginMenu("Layer Order Plus", act)
+                except Exception:
+                    pass
+                # Remove from main window actions
+                try:
+                    self.iface.mainWindow().removeAction(act)
                 except Exception:
                     pass
                 act.deleteLater()
@@ -332,14 +381,17 @@ class BetterLayerOrderPlugin(QObject):
             key = event.key()
             mods = event.modifiers()
             from qgis.PyQt.QtCore import Qt
-            is_undo = (key in (Qt.Key.Key_Z, Qt.Key.Key_Y) and mods == Qt.KeyboardModifier.ControlModifier)
+            # Ctrl+Z (no Shift) = undo
+            is_undo = (key == Qt.Key.Key_Z and mods == Qt.KeyboardModifier.ControlModifier)
+            # Ctrl+Y OR Ctrl+Shift+Z = redo
+            is_redo_y = (key == Qt.Key.Key_Y and mods == Qt.KeyboardModifier.ControlModifier)
             is_redo_shift = (key == Qt.Key.Key_Z and mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
-            if (is_undo or is_redo_shift) and not self._is_editing_layer():
+            if (is_undo or is_redo_y or is_redo_shift) and not self._is_editing_layer():
                 if is_undo and self._undo_group and self._undo_group.canUndo():
                     event.accept()
                     self._undo_group.undo()
                     return True
-                if is_redo_shift and self._undo_group and self._undo_group.canRedo():
+                if (is_redo_y or is_redo_shift) and self._undo_group and self._undo_group.canRedo():
                     event.accept()
                     self._undo_group.redo()
                     return True
