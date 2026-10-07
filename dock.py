@@ -378,10 +378,15 @@ class BetterLayerOrderDock(QDockWidget):
         self.tree.setAnimated(True)
         lay.addWidget(self.tree)
 
-        # shortcuts
-        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo_stack.undo)
-        QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.undo_stack.redo)
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self.undo_stack.redo)
+        # Local shortcuts when the dock has focus (plugin also hooks Edit menu / app shortcuts)
+        for seq, slot in (
+            (QKeySequence.StandardKey.Undo, self.undo_stack.undo),
+            (QKeySequence.StandardKey.Redo, self.undo_stack.redo),
+            (QKeySequence("Ctrl+Shift+Z"), self.undo_stack.redo),
+        ):
+            sc = QShortcut(seq, self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(slot)
 
         # tree callbacks
         self.tree.set_state_provider(self._serialize_tree)
