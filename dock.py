@@ -1128,18 +1128,34 @@ class BetterLayerOrderDock(QDockWidget):
         act_create = menu.addAction(_icon_add_group(), "Create group")
         act_rename = menu.addAction(_icon_rename_group(), "Rename group")
         act_delete = menu.addAction(_icon_remove_group(), "Delete group")
+        menu.addSeparator()
+        act_expand = menu.addAction("Expand group")
+        act_collapse = menu.addAction("Collapse group")
+        menu.addSeparator()
+        act_top = menu.addAction("Move to top")
+        act_bottom = menu.addAction("Move to bottom")
 
         groups = self._selected_groups()
+        sel = self.tree.selectedItems()
         # if right-click on an item not in selection, select it first
         under = self.tree.itemAt(pos)
-        if under is not None and under not in self.tree.selectedItems():
+        if under is not None and under not in sel:
             self.tree.clearSelection()
             under.setSelected(True)
             self.tree.setCurrentItem(under)
             groups = self._selected_groups()
+            sel = self.tree.selectedItems()
 
         act_rename.setEnabled(len(groups) == 1)
         act_delete.setEnabled(len(groups) >= 1)
+        # Expand/Collapse: enabled if at least one group is selected.
+        # If clicked outside any item but groups exist in tree, applies to all groups.
+        act_expand.setEnabled(len(groups) >= 1)
+        act_collapse.setEnabled(len(groups) >= 1)
+        # Move to top/bottom: enabled if at least one item is selected and the
+        # selection isn't already at the boundary.
+        act_top.setEnabled(bool(sel))
+        act_bottom.setEnabled(bool(sel))
 
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
         if chosen == act_create:
@@ -1148,6 +1164,62 @@ class BetterLayerOrderDock(QDockWidget):
             self.rename_selected_group()
         elif chosen == act_delete:
             self.delete_selected_groups()
+        elif chosen == act_expand:
+            for g in groups:
+                g.setExpanded(True)
+        elif chosen == act_collapse:
+            for g in groups:
+                g.setExpanded(False)
+        elif chosen == act_top:
+            self._move_selected_to_boundary(to_top=True)
+        elif chosen == act_bottom:
+            self._move_selected_to_boundary(to_top=False)
+
+    def _move_selected_to_boundary(self, to_top: bool):
+        """Move all selected items to the top (or bottom) of their respective parents."""
+        if not self.is_control_enabled():
+            return
+        sel = self.tree.selectedItems()
+        if not sel:
+            return
+        before = self._snapshot or self._serialize_tree()
+        # Sort by current index, descending for take (so indices don't shift under us).
+        # Group by parent so we operate within each parent's range.
+        try:
+            self.tree.blockSignals(True)
+            for it in sorted(sel, key=self._index_in_parent, reverse=True):
+                p = it.parent()
+                if p is None:
+                    cur_idx = self.tree.indexOfTopLevelItem(it)
+                    taken = self.tree.takeTopLevelItem(cur_idx)
+                    if to_top:
+                        self.tree.insertTopLevelItem(0, taken)
+                    else:
+                        self.tree.insertTopLevelItem(self.tree.topLevelItemCount(), taken)
+                else:
+                    cur_idx = p.indexOfChild(it)
+                    taken = p.takeChild(cur_idx)
+                    if to_top:
+                        p.insertChild(0, taken)
+                    else:
+                        p.insertChild(p.childCount(), taken)
+        finally:
+            self.tree.blockSignals(False)
+
+        # Re-select the moved items (selection is lost on take).
+        for it in sel:
+            try:
+                it.setSelected(True)
+            except RuntimeError:
+                pass
+
+        after = self._serialize_tree()
+        if before != after:
+            self.request_apply()
+            self._push_undo(before, after, "Move to top" if to_top else "Move to bottom")
+            self._autosave()
+            _log(f"_move_selected_to_boundary({'top' if to_top else 'bottom'}): "
+                 f"moved {len(sel)} item(s)")
 
     def _on_selection_changed(self):
         self._capture_anchor_from_selection()
