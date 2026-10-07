@@ -1,8 +1,10 @@
-## Status as of 1.0.12
+## Status as of 1.0.15
 
-Completed since initial review: Qt6 port, map undo, bundled icons, Edit-menu undo, drop-on-layer grouping, unique names, expand-on-create, rename via dialog/toolbar/context, multi-delete, CI/Makefile/VERSION.
+Completed since initial review: Qt6 port, map undo, bundled icons, Edit-menu undo, drop-on-layer grouping, unique names, expand-on-create, rename via dialog/toolbar/context, multi-delete, CI/Makefile/VERSION, control-rendering checkbox (1.0.14), diagnostic logging in layer add/remove/apply paths (1.0.15).
 
-Still open toward 1.1.0: dual undo on drag, initial order seed, layer rename sync, JSON schema version, visibility toggles, automated GUI tests.
+Still open toward 1.1.0: dual undo on drag (1.1 / 4.5), initial order seed (1.2), layer rename sync (2.1), empty-group cleanup (2.2), JSON schema version (2.4), visibility toggles (3.1), context-menu completion (3.2), search/filter (3.3), drop-rule tooltips (3.5), and Phase 4 architecture items (split dock.py, dedup, type hints, unit tests).
+
+**Doc audit (1.0.15) reconciled the stale 1.0.12 status:** items 1.3 (sticky checkbox), 1.4 (QGIS 4 minimum), 2.3 (logging), 3.4 (View → Panels), and 3.6 (shortcut focus) are all actually DONE in code — the doc previously listed them as TODO/PARTIAL.
 
 ---
 
@@ -96,7 +98,7 @@ _apply_tree_state_from_undo:
 2. Add optional UI checkbox “Control rendering order” (mirror stock Layer Order panel).
 3. Persist checkbox state in project entry.
 
-**Status:** **PARTIAL** (force True in apply; no checkbox yet)
+**Status:** **DONE** — checkbox shipped in 1.0.14 (`chk_control` at `dock.py:555`, `_on_control_toggled` at `dock.py:609`). State persists implicitly via QGIS's own `hasCustomLayerOrder` flag; `setDirty(True)` called on toggle.
 
 ---
 
@@ -109,7 +111,7 @@ _apply_tree_state_from_undo:
 - **A (recommended for this fork):** Set `qgisMinimumVersion=4.0.0`, document QGIS 4-only.
 - **B:** Compatibility shim for every enum / import; test on 3.34 and 4.2.
 
-**Status:** **TODO** (decide + update metadata)
+**Status:** **DONE** — Option A chosen. `metadata.txt:3` `qgisMinimumVersion=4.0.0`, `qgisMaximumVersion=4.99.0`.
 
 ---
 
@@ -155,7 +157,7 @@ _apply_tree_state_from_undo:
 1. `from qgis.core import QgsMessageLog, Qgis`
 2. Log with `QgsMessageLog.logMessage(..., "LayerOrderPlus", Qgis.Warning)`.
 
-**Status:** **TODO**
+**Status:** **DONE** — shipped in 1.0.15. Centralised `_log()` helper at `dock.py:42-51`; logged in `load_from_project`, `on_layers_added`, `on_layers_removed`, `_apply_custom_order`, dock `__init__`. Critical paths log `traceback.format_exc()` at `Qgis.Critical`. (Icon-loading fallbacks at lines 46/50/148/165/168/195/208/219/227/240/248/258/406/622 still bare-except — intentional, those are best-effort fallbacks.)
 
 ---
 
@@ -178,11 +180,11 @@ _apply_tree_state_from_undo:
 | # | Item | Steps |
 |---|------|--------|
 | 3.1 | Visibility checkboxes | Optional per-layer check state synced with layer `setItemVisibilityChecked` / renderer — or document “ordering only” |
-| 3.2 | Context menu | Rename, Delete group, Expand/Collapse, Move to top/bottom |
+| 3.2 | Context menu | **PARTIAL** — Create / Rename / Delete group shipped in 1.0.12. Missing: Expand / Collapse / Move to top / Move to bottom. |
 | 3.3 | Search / filter | `QLineEdit` filtering tree items by name |
-| 3.4 | Panel registration | Also list under **View → Panels** |
+| 3.4 | Panel registration | **DONE** — auto-registered via `iface.addDockWidget` (QGIS lists every dock widget under View → Panels automatically). |
 | 3.5 | Tooltips | Explain OnItem / Above / Below drop rules |
-| 3.6 | Shortcut focus | Prefer `QAction` with `Qt.ApplicationShortcut` or clear “focus dock for Ctrl+Z” |
+| 3.6 | Shortcut focus | **DONE** — both layers shipped in 1.0.8: app-level `QAction`s with `Qt.ShortcutContext.ApplicationShortcut` (`plugin.py:99-100,104`) + global event filter (`plugin.py:223-250`); dock-local fallback `QShortcut` with `WidgetWithChildrenShortcut` (`dock.py:562-570`). |
 
 **Status:** **TODO**
 
@@ -194,7 +196,7 @@ _apply_tree_state_from_undo:
 |---|------|--------|
 | 4.1 | Split `dock.py` | `tree_widget.py` (BetterLayerTree), `icons.py`, `serialize.py`, `apply.py`, `dock.py` |
 | 4.2 | Deduplicate | Single `_make_layer_item` / `_make_group_item`; one `_index_in_parent` |
-| 4.3 | Type hints | Annotate public methods |
+| 4.3 | Type hints | **PARTIAL** — ~30% of public methods annotated (e.g. `is_control_enabled() -> bool`, `_serialize_tree() -> str`). `lyr` params never typed. |
 | 4.4 | Unit tests | Serialize/deserialize round-trip; flatten order; icon non-null (headless where possible) |
 | 4.5 | Dual event cleanup | See 1.1 |
 
