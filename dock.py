@@ -35,6 +35,39 @@ def _new_group_id():
     return "grp_" + uuid.uuid4().hex[:10]
 
 
+def _collect_group_names(tree: QTreeWidget) -> set:
+    names = set()
+
+    def walk(item: QTreeWidgetItem):
+        if item.data(0, ROLE_TYPE) == TYPE_GROUP:
+            names.add(item.text(0))
+        for i in range(item.childCount()):
+            walk(item.child(i))
+
+    for i in range(tree.topLevelItemCount()):
+        walk(tree.topLevelItem(i))
+    return names
+
+
+def _unique_group_name(tree: QTreeWidget, base: str = "New group") -> str:
+    """Return base, or 'base 2', 'base 3', … if base is already used."""
+    existing = _collect_group_names(tree)
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base} {n}" in existing:
+        n += 1
+    return f"{base} {n}"
+
+
+def _expand_item_and_ancestors(item: QTreeWidgetItem):
+    """Expand item and every parent so the new group is visible."""
+    cur = item
+    while cur is not None:
+        cur.setExpanded(True)
+        cur = cur.parent()
+
+
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 _ICONS_DIR = os.path.join(_PLUGIN_DIR, "icons")
 
@@ -292,8 +325,9 @@ class BetterLayerTree(QTreeWidget):
                 # Take target out (still a valid QTreeWidgetItem)
                 target_taken = self._take_item(target)
 
-                # Build group
-                grp = QTreeWidgetItem(["New group"])
+                # Build group with a unique default name
+                gname = _unique_group_name(self, "New group")
+                grp = QTreeWidgetItem([gname])
                 grp.setData(0, ROLE_TYPE, TYPE_GROUP)
                 grp.setData(0, ROLE_ID, _new_group_id())
                 try:
@@ -309,16 +343,24 @@ class BetterLayerTree(QTreeWidget):
                 for it in taken:
                     grp.addChild(it)
 
-                grp.setExpanded(True)
                 self.clearSelection()
                 grp.setSelected(True)
                 self.setCurrentItem(grp)
+
+                # Expand now and again after Qt finishes the drop (avoids collapse)
+                _expand_item_and_ancestors(grp)
+
+                def _keep_expanded(g=grp):
+                    setattr(self, "_just_custom_dropped", False)
+                    if g is not None:
+                        _expand_item_and_ancestors(g)
+                        self.scrollToItem(g)
 
                 e.accept()
                 after = self._state_provider()
                 if self._after_drop_cb:
                     self._after_drop_cb(before, after)
-                QTimer.singleShot(0, lambda: setattr(self, "_just_custom_dropped", False))
+                QTimer.singleShot(0, _keep_expanded)
                 return
 
             # --- OnItem + GROUP / Above / Below: classic move ---
@@ -632,10 +674,14 @@ class BetterLayerOrderDock(QDockWidget):
     def create_group_from_selection(self):
         before = self._snapshot or self._serialize_tree()
 
-        name, ok = QInputDialog.getText(self, "New group", "Group name:", text="New group")
+        default_name = _unique_group_name(self.tree, "New group")
+        name, ok = QInputDialog.getText(self, "New group", "Group name:", text=default_name)
         if not ok:
             return
-        name = (name or "").strip() or "New group"
+        name = (name or "").strip() or default_name
+        # If user kept a name that collides, make it unique
+        if name in _collect_group_names(self.tree):
+            name = _unique_group_name(self.tree, name)
 
         selected = self.tree.selectedItems() or []
         selected_ids = {id(x) for x in selected}
@@ -670,8 +716,9 @@ class BetterLayerOrderDock(QDockWidget):
             if taken is not None:
                 grp.insertChild(0, taken)
 
-        grp.setExpanded(True)
+        _expand_item_and_ancestors(grp)
         self.tree.setCurrentItem(grp)
+        self.tree.scrollToItem(grp)
 
         self.request_apply()
         after = self._serialize_tree()
