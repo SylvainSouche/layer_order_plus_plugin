@@ -1,35 +1,26 @@
 [general]
 name=Layer Order Plus
-qgisMinimumVersion=3.16
+qgisMinimumVersion=4.0.0
 qgisMaximumVersion=4.99.0
-description=Kinda like Layer Order panel, but with grouping. (QGIS 3 + 4 compatible)
-about=You can create groups of layers and delete them. Layer order in this panel will be the same at the Layer Order panel. Fixed for QGIS 4 (PyQt6) import of QUndoCommand/QUndoStack.
+description=Layer Order panel with grouping (QGIS 4 / PyQt6 fork)
+about=Alternative to the Layer Order panel with order groups. Fork of the original Layer Order Plus 1.0.0 for QGIS 4: PyQt6 imports/enums, undo restores map draw order, folder and layer-type icons. Groups are for ordering only (not Layers-panel groups).
 version=1.0.5
-author=Samuel Kultz (Kultz Engenharia) + QGIS4 fix
+author=Samuel Kultz (original); Sylvain Souche (QGIS 4 fork)
 email=samkultz@me.com
 category=Productivity
 tags=layers,layer tree,order,groups,workflow,productivity
-homepage=https://github.com/samkultz/layer_order_plus_plugin
-repository=https://github.com/samkultz/layer_order_plus_plugin
-tracker=https://github.com/samkultz/layer_order_plus_plugin/issues
+homepage=https://github.com/SylvainSouche/layer_order_plus_plugin
+repository=https://github.com/SylvainSouche/layer_order_plus_plugin
+tracker=https://github.com/SylvainSouche/layer_order_plus_plugin/issues
 icon=icon.png
 hasProcessingProvider=no
 experimental=True
 deprecated=False
 server=False
-changelog=1.0.5
-  - Makefile + VERSION single source of truth; versioned zip name
-1.0.4
-  - Group folder icons + real layer-type icons (QgsIconUtils)
-  - Full docs: DOCUMENTATION, TEST_SCENARIO, QUALITY_OVERHAUL
-1.0.3
-  - Fix: undo restored the panel tree but not the map rendering order (request_apply was blocked by _in_undo)
-1.0.2
-  - Full Qt6 enum migration (UserRole, ItemIsEditable, DropIndicatorPosition, SelectionMode, DragDropMode, StandardKey, DockWidgetArea, QAction)
-1.0.1
-  - Fixed ImportError on QGIS 4 / PyQt6: moved QUndoCommand and QUndoStack from QtWidgets to QtGui
-  - Added qgisMaximumVersion=4.99.0
-1.0.0
-  - Initial release
-  - Shouldn´t have problems upon qgis starting.
-  - Visibility, like in Layer Order, not yet implemented.
+changelog=
+    1.0.5: Makefile and VERSION single source of truth; versioned zip name
+    1.0.4: Group folder icons and layer-type icons; documentation suite
+    1.0.3: Undo restores map custom layer order, not only panel tree
+    1.0.2: Full Qt6 enum migration
+    1.0.1: QUndoCommand/QUndoStack import fix for PyQt6
+    1.0.0: Initial upstream release (Samuel Kultz)
