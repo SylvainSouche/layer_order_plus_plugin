@@ -430,9 +430,12 @@ class LayerOrderView(QDockWidget):
             it.setData(0, ROLE_ID, node["id"])
             it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
             if layer_icon_provider is not None:
-                icon = layer_icon_provider(node["id"])
-                if icon is not None:
-                    it.setIcon(0, icon)
+                try:
+                    icon = layer_icon_provider(node["id"])
+                    if icon is not None and not icon.isNull():
+                        it.setIcon(0, icon)
+                except Exception:
+                    pass
             it.setCheckState(0, Qt.CheckState.Checked if node.get("visible", True) else Qt.CheckState.Unchecked)
             if parent_item is None:
                 self.tree.addTopLevelItem(it)

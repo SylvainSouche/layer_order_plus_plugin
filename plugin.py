@@ -177,17 +177,20 @@ class BetterLayerOrderPlugin(QObject):
         try:
             raw_json = self._load_tree_json()
             if raw_json:
-                # Load saved tree
+                # Load saved tree from project
                 self.view_controller.load_from_json(raw_json)
             else:
-                # No saved tree — populate from current project layers in draw order
+                # No saved tree — populate from current project layers in draw order.
+                # Populate the Model directly, then rebuild the View once.
+                # (No JSON round-trip — that was losing layer names in 1.2.1/1.2.2.)
                 layers = self.controller.get_ordered_project_layers()
                 self.view_controller.clear()
                 with self.model.block_notifications():
                     for lyr in layers:
                         self.model.add_layer(lyr.id(), lyr.name())
-                # Trigger a rebuild
-                self.view_controller.load_from_json(self.model.serialize())
+                # Force a single View rebuild after the block
+                self.view_controller._rebuild_view_from_model()
+                self.view_controller._snapshot = self.model.serialize()
 
             # Connect rename + visibility for all existing layers
             for lyr in QgsProject.instance().mapLayers().values():
@@ -199,6 +202,11 @@ class BetterLayerOrderPlugin(QObject):
 
             # Clear undo stack (fresh project)
             self.view_controller.undo_stack.clear()
+        except Exception as e:
+            from qgis.core import QgsMessageLog, Qgis
+            QgsMessageLog.logMessage(f"_on_project_read FAILED: {e!r}", "LayerOrderPlus", Qgis.Critical)
+            import traceback
+            QgsMessageLog.logMessage(traceback.format_exc(), "LayerOrderPlus", Qgis.Critical)
         finally:
             self._loading = False
             self.controller.set_apply_suspended(False)
