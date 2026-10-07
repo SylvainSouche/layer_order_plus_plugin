@@ -1,5 +1,6 @@
 # dock.py
 import json
+import os
 import uuid
 
 from qgis.PyQt.QtCore import Qt, QTimer, QSize
@@ -34,8 +35,21 @@ def _new_group_id():
     return "grp_" + uuid.uuid4().hex[:10]
 
 
-def _theme_icon(*names):
-    """Try several theme icon names; return first non-null QIcon."""
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+_ICONS_DIR = os.path.join(_PLUGIN_DIR, "icons")
+
+
+def _bundled_icon(filename: str) -> QIcon:
+    """Load an icon shipped with the plugin (always works offline / no theme)."""
+    path = os.path.join(_ICONS_DIR, filename)
+    if os.path.isfile(path):
+        icon = QIcon(path)
+        if not icon.isNull():
+            return icon
+    return QIcon()
+
+
+def _theme_icon(*names) -> QIcon:
     for name in names:
         for candidate in (name, name.lstrip("/"), "/" + name.lstrip("/")):
             try:
@@ -47,28 +61,52 @@ def _theme_icon(*names):
     return QIcon()
 
 
-def _icon_group():
-    """Folder icon for order-groups (UI only, not Layers-panel groups)."""
-    icon = _theme_icon(
-        "/mIconFolder.svg",
-        "/mIconFolderOpen.svg",
-        "/mActionFolder.svg",
-        "mIconFolder.svg",
-    )
-    if icon.isNull():
-        # Always available on every platform (Qt standard pixmap)
+def _icon_group() -> QIcon:
+    """Folder icon for order-groups."""
+    icon = _bundled_icon("folder.svg")
+    if not icon.isNull():
+        return icon
+    icon = _theme_icon("/mIconFolder.svg", "/mIconFolderOpen.svg")
+    if not icon.isNull():
+        return icon
+    try:
+        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+    except Exception:
         try:
-            icon = QApplication.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+            return QApplication.style().standardIcon(QStyle.SP_DirIcon)
         except Exception:
-            try:
-                icon = QApplication.style().standardIcon(QStyle.SP_DirIcon)
-            except Exception:
-                icon = QIcon()
-    return icon
+            return QIcon()
 
 
-def _icon_for_layer(layer):
-    """QGIS layer-type icon (point/line/polygon/raster/…), with solid fallbacks."""
+def _icon_add_group() -> QIcon:
+    icon = _bundled_icon("add_group.svg")
+    if not icon.isNull():
+        return icon
+    icon = _theme_icon("/mActionAddGroup.svg", "/mIconAddGroup.svg")
+    if not icon.isNull():
+        return icon
+    return _icon_group()
+
+
+def _icon_remove_group() -> QIcon:
+    icon = _bundled_icon("remove_group.svg")
+    if not icon.isNull():
+        return icon
+    icon = _theme_icon(
+        "/mActionRemoveSelectedLayer.svg",
+        "/mActionDeleteSelected.svg",
+        "/mIconRemove.svg",
+    )
+    if not icon.isNull():
+        return icon
+    try:
+        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+    except Exception:
+        return _icon_group()
+
+
+def _icon_for_layer(layer) -> QIcon:
+    """Prefer QGIS type icon, then bundled SVG by geometry/type, then generic."""
     if layer is not None:
         try:
             icon = QgsIconUtils.iconForLayer(layer)
@@ -76,28 +114,8 @@ def _icon_for_layer(layer):
                 return icon
         except Exception:
             pass
-        # Fallbacks by layer / geometry type
         try:
-            lt = layer.type()
-            # Qgis.LayerType or QgsMapLayer enum depending on version
-            name = str(lt)
-            if "Raster" in name or lt == QgsMapLayer.RasterLayer:
-                icon = _theme_icon("/mIconRaster.svg", "/mIconRasterLayer.svg")
-                if not icon.isNull():
-                    return icon
-            if "Mesh" in name:
-                icon = _theme_icon("/mIconMeshLayer.svg")
-                if not icon.isNull():
-                    return icon
-            if "PointCloud" in name:
-                icon = _theme_icon("/mIconPointCloudLayer.svg")
-                if not icon.isNull():
-                    return icon
-            if "VectorTile" in name:
-                icon = _theme_icon("/mIconVectorTileLayer.svg")
-                if not icon.isNull():
-                    return icon
-            if isinstance(layer, QgsVectorLayer) or "Vector" in name:
+            if isinstance(layer, QgsVectorLayer):
                 try:
                     icon = QgsIconUtils.iconForWkbType(layer.wkbType())
                     if icon is not None and not icon.isNull():
@@ -105,30 +123,36 @@ def _icon_for_layer(layer):
                 except Exception:
                     pass
                 try:
-                    g = layer.geometryType()
-                    gname = str(g)
+                    gname = str(layer.geometryType())
                     if "Point" in gname:
-                        return _theme_icon("/mIconPointLayer.svg")
+                        icon = _bundled_icon("point.svg")
+                        return icon if not icon.isNull() else _theme_icon("/mIconPointLayer.svg")
                     if "Line" in gname:
-                        return _theme_icon("/mIconLineLayer.svg")
+                        icon = _bundled_icon("line.svg")
+                        return icon if not icon.isNull() else _theme_icon("/mIconLineLayer.svg")
                     if "Polygon" in gname:
-                        return _theme_icon("/mIconPolygonLayer.svg")
-                    if "Null" in gname:
-                        return _theme_icon("/mIconTableLayer.svg")
+                        icon = _bundled_icon("polygon.svg")
+                        return icon if not icon.isNull() else _theme_icon("/mIconPolygonLayer.svg")
                 except Exception:
                     pass
+            name = str(layer.type())
+            if "Raster" in name:
+                icon = _bundled_icon("raster.svg")
+                if not icon.isNull():
+                    return icon
+                return _theme_icon("/mIconRaster.svg")
         except Exception:
             pass
-    icon = _theme_icon("/mIconLayer.png", "/mIconVector.svg")
-    if icon.isNull():
-        try:
-            icon = QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        except Exception:
-            try:
-                icon = QApplication.style().standardIcon(QStyle.SP_FileIcon)
-            except Exception:
-                icon = QIcon()
-    return icon
+    icon = _bundled_icon("layer.svg")
+    if not icon.isNull():
+        return icon
+    icon = _theme_icon("/mIconLayer.png")
+    if not icon.isNull():
+        return icon
+    try:
+        return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+    except Exception:
+        return QIcon()
 
 
 class TreeStateCommand(QUndoCommand):
@@ -323,8 +347,20 @@ class BetterLayerOrderDock(QDockWidget):
         head = QHBoxLayout()
         lay.addLayout(head)
 
-        self.btn_add_group = QPushButton("Create group")
-        self.btn_del_group = QPushButton("Delete group")
+        self.btn_add_group = QPushButton()
+        self.btn_add_group.setIcon(_icon_add_group())
+        self.btn_add_group.setToolTip("Create group")
+        self.btn_add_group.setFlat(True)
+        self.btn_add_group.setFixedSize(28, 28)
+        self.btn_add_group.setIconSize(QSize(16, 16))
+
+        self.btn_del_group = QPushButton()
+        self.btn_del_group.setIcon(_icon_remove_group())
+        self.btn_del_group.setToolTip("Delete group")
+        self.btn_del_group.setFlat(True)
+        self.btn_del_group.setFixedSize(28, 28)
+        self.btn_del_group.setIconSize(QSize(16, 16))
+
         head.addWidget(self.btn_add_group)
         head.addWidget(self.btn_del_group)
         head.addStretch(1)
