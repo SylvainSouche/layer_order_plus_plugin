@@ -439,13 +439,6 @@ class BetterLayerOrderDock(QDockWidget):
         self._snapshot = ""
         self.undo_stack = QUndoStack(self)
 
-        # rename debounce
-        self._rename_pending = False
-        self._rename_before = ""
-        self._rename_timer = QTimer(self)
-        self._rename_timer.setSingleShot(True)
-        self._rename_timer.timeout.connect(self._commit_rename_undo)
-
         # safe apply debounce
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
