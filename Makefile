@@ -12,14 +12,14 @@ DIST_DIR     := $(PLUGIN_DIR)/dist
 ZIP_NAME     := $(PLUGIN_NAME)-$(VERSION).zip
 ZIP_PATH     := $(DIST_DIR)/$(ZIP_NAME)
 
-.PHONY: all zip sync clean show-version help check
+.PHONY: all zip sync clean show-version help check test
 
 all: zip
 
 help:
 	@echo "VERSION (from ./VERSION) = $(VERSION)"
 	@echo "Output zip               = $(ZIP_PATH)"
-	@echo "Targets: zip sync clean show-version check"
+	@echo "Targets: zip sync clean show-version check test"
 
 show-version:
 	@echo $(VERSION)
@@ -40,6 +40,9 @@ print(f'metadata.txt version -> {ver}')"
 check:
 	python3 "$(PLUGIN_DIR)/scripts/check_plugin.py"
 
+test:
+	@bash "$(PLUGIN_DIR)/scripts/run_tests.sh"
+
 zip: sync
 	@mkdir -p "$(DIST_DIR)"
 	@echo "Building $(ZIP_NAME) ..."
@@ -52,7 +55,12 @@ zip: sync
 		-x "*/.DS_Store" \
 		-x "*/.git/*" \
 		-x "*/dist/*" \
-		-x "*/.github/*"
+		-x "*/.github/*" \
+		-x "*/tests/*" \
+		-x "*/pytest.ini" \
+		-x "*/.pytest_cache/*" \
+		-x "*/scripts/run_tests.sh" \
+		-x "*/scripts/setup_libegl.sh"
 	@ls -la "$(ZIP_PATH)"
 	@echo "OK: $(ZIP_PATH)"
 
