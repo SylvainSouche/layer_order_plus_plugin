@@ -1,5 +1,5 @@
 # plugin.py
-from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtGui import QAction
 from qgis.PyQt.QtCore import QObject, Qt, QTimer
 from qgis.core import QgsProject
 
@@ -22,7 +22,7 @@ class BetterLayerOrderPlugin(QObject):
 
         self.dock = BetterLayerOrderDock(self.iface)
         self.dock.set_save_callback(self._save_tree_json)
-        self.iface.addDockWidget(Qt.LeftDockWidgetArea, self.dock)
+        self.iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock)
 
         # block apply + autosave until project is fully read
         self.dock.set_apply_suspended(True)
