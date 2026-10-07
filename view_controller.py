@@ -70,6 +70,8 @@ class ViewController(QObject):
     order_changed = pyqtSignal()
     # Signal emitted when the Model is bulk-loaded (Controller listens to re-apply)
     model_loaded = pyqtSignal()
+    # Signal emitted when the tree state changes and should be persisted
+    save_requested = pyqtSignal(str)  # serialized tree JSON
 
     def __init__(self, model: LayerOrderModel, view: LayerOrderView,
                  layer_icon_provider=None, parent=None):
@@ -79,6 +81,7 @@ class ViewController(QObject):
         self._layer_icon_provider = layer_icon_provider  # callable(layer_id) -> QIcon
         self._in_undo = False
         self._snapshot = ""
+        self._filter_text = ""  # stored so we can reapply after rebuilds
 
         # Undo stack
         self.undo_stack = QUndoStack(self)
@@ -105,6 +108,7 @@ class ViewController(QObject):
         v.control_toggled.connect(self._on_control_toggled)  # re-emitted to Controller
         v.remove_empty_toggled.connect(self._on_remove_empty_toggled)
         v.layer_visibility_toggled.connect(self._on_layer_visibility_toggled)
+        v.group_visibility_toggled.connect(self._on_group_visibility_toggled)
         v.item_double_clicked.connect(self._on_item_double_clicked)
         v.drop_intent.connect(self._on_drop_intent)
 
@@ -146,9 +150,16 @@ class ViewController(QObject):
             self.order_changed.emit()
 
     def _rebuild_view_from_model(self):
-        """Full View rebuild from the Model's current state."""
+        """Full View rebuild from the Model's current state.
+
+        Also reapplies the current filter text so filtered-out items stay
+        hidden after a rebuild (e.g. after a drag-drop).
+        """
         nodes = self._serialize_model_to_nodes()
         self._view.rebuild_from_nodes(nodes, self._layer_icon_provider)
+        # Reapply the current filter so items hidden by the filter stay hidden
+        if self._filter_text:
+            self._view.apply_filter(self._filter_text)
 
     def _serialize_model_to_nodes(self):
         """Convert the Model's tree to a list of node dicts for the View."""
@@ -189,10 +200,13 @@ class ViewController(QObject):
             parent_id, index = self._view.resolve_anchor_for_insertion()
             gid = self._model.create_group(name, parent_id=parent_id, index=index)
 
-            # Move selected items into the new group
+            # Move selected items into the new group, preserving order.
+            # Insert at incrementing indices so first selected ends up first.
             selected_ids = self._view.get_selected_item_ids()
+            insert_index = 0
             for item_id in selected_ids:
-                self._model.move_item(item_id, gid, 0)
+                self._model.move_item(item_id, gid, insert_index)
+                insert_index += 1
 
             self._view.expand_and_select_item(gid)
             self._model.set_expanded(gid, True)
@@ -284,11 +298,14 @@ class ViewController(QObject):
             self._model.set_expanded(gid, False)
 
     def _on_filter_changed(self, text):
+        """Store the filter text so it can be reapplied after rebuilds."""
+        self._filter_text = text or ""
         self._view.apply_filter(text)
 
     def _on_control_toggled(self, checked):
-        # Re-emit — Controller handles QGIS hasCustomLayerOrder sync
-        pass  # Controller connects to view.control_toggled directly
+        # Controller handles QGIS hasCustomLayerOrder sync directly.
+        # VC doesn't need to do anything here.
+        pass
 
     def _on_remove_empty_toggled(self, checked):
         self._model.set_remove_empty_groups(bool(checked))
@@ -301,6 +318,29 @@ class ViewController(QObject):
         """
         self._model.set_visibility(layer_id, checked)
 
+    def _on_group_visibility_toggled(self, group_id, checked):
+        """User toggled a group checkbox → propagate to all descendant layers.
+
+        Walks the Model tree under `group_id` and sets visibility on every
+        LayerNode. The Model emits VISIBILITY_CHANGED for each, which the
+        ViewController routes to the View (updating checkboxes) and the
+        Controller routes to QGIS (setItemVisibilityChecked + map refresh).
+        """
+        node = self._model.find_item(group_id)
+        if not isinstance(node, GroupNode):
+            return
+        # Collect all descendant layer ids
+        layer_ids = []
+        def walk(n):
+            if isinstance(n, LayerNode):
+                layer_ids.append(n.id)
+            elif isinstance(n, GroupNode):
+                for ch in n.children:
+                    walk(ch)
+        walk(node)
+        for lid in layer_ids:
+            self._model.set_visibility(lid, checked)
+
     def _on_item_double_clicked(self, group_id):
         """User double-clicked a group → toggle expanded state in Model."""
         node = self._model.find_item(group_id)
@@ -308,7 +348,12 @@ class ViewController(QObject):
             self._model.set_expanded(group_id, not node.expanded)
 
     def _on_drop_intent(self, moving_ids, target_id, position):
-        """Translate semantic drop intent to Model mutations."""
+        """Translate semantic drop intent to Model mutations.
+
+        Insertion order: items are inserted at incrementing indices so the
+        relative order of the moved items is preserved (first moved item
+        ends up first in the destination).
+        """
         if self._in_undo:
             return
         try:
@@ -324,31 +369,46 @@ class ViewController(QObject):
                 target_index = self._model.get_index_in_parent(target_id)
                 gid = self._model.create_group("New group", parent_id=parent_id,
                                                index=target_index)
-                # Move target into the new group first
+                # Move target into the new group first (index 0)
                 self._model.move_item(target_id, gid, 0)
-                # Then move each dropped item into the group
+                # Then move each dropped item after the target, incrementing
+                # the index so order is preserved: [target, mover1, mover2, ...]
+                insert_index = 1
                 for item_id in moving_ids:
-                    self._model.move_item(item_id, gid, 1)  # after the target
+                    self._model.move_item(item_id, gid, insert_index)
+                    insert_index += 1
                 self._model.set_expanded(gid, True)
                 self._view.expand_and_select_item(gid)
             elif position == DROP_ON and isinstance(target, GroupNode):
-                # Drop ON a group → move items into top of group
+                # Drop ON a group → move items into top of group, preserving order.
+                # Insert at index 0, 1, 2, ... so first mover ends up on top.
+                insert_index = 0
                 for item_id in moving_ids:
-                    self._model.move_item(item_id, target_id, 0)
+                    self._model.move_item(item_id, target_id, insert_index)
+                    insert_index += 1
             elif position == DROP_ABOVE:
-                # Drop ABOVE → move to target's parent at target's index
+                # Drop ABOVE → move to target's parent at target's index,
+                # incrementing so order is preserved.
                 parent = self._model.find_parent(target_id)
                 parent_id = parent.id if parent is not None else None
                 target_index = self._model.get_index_in_parent(target_id)
+                insert_index = target_index
                 for item_id in moving_ids:
-                    self._model.move_item(item_id, parent_id, target_index)
+                    self._model.move_item(item_id, parent_id, insert_index)
+                    insert_index += 1
             elif position == DROP_BELOW:
-                # Drop BELOW → move to target's parent at target's index + 1
+                # Drop BELOW → move to target's parent at target's index + 1,
+                # incrementing so order is preserved.
                 parent = self._model.find_parent(target_id)
                 parent_id = parent.id if parent is not None else None
                 target_index = self._model.get_index_in_parent(target_id)
+                insert_index = target_index + 1
                 for item_id in moving_ids:
-                    self._model.move_item(item_id, parent_id, target_index + 1)
+                    self._model.move_item(item_id, parent_id, insert_index)
+                    insert_index += 1
+
+            # Re-select the moved items (rebuild after ITEM_MOVED loses selection)
+            self._view.select_items(moving_ids)
 
             after = self._model.serialize()
             if before != after:
@@ -453,7 +513,16 @@ class ViewController(QObject):
         return self._model.get_flattened_layer_ids()
 
     def _autosave(self):
-        """Trigger autosave — plugin.py connects this to QgsProject.writeEntry."""
-        # The plugin owns the save callback; we emit a signal or call back.
-        # For simplicity, plugin.py polls serialize() on project save.
-        pass
+        """Emit save_requested with the current serialized tree.
+
+        plugin.py connects this signal to _save_tree_json (which writes
+        QgsProject entry + setDirty). Without this, tree changes during
+        a session would only be saved on plugin unload — risking data loss
+        on crash.
+        """
+        if self._in_undo:
+            return
+        try:
+            self.save_requested.emit(self._model.serialize())
+        except Exception:
+            pass

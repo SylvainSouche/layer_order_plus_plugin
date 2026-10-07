@@ -12,16 +12,14 @@ The View does NOT:
 The View DOES use icons.py (leaf module) for icon rendering — that's a
 display concern, not a business-logic concern.
 """
-from qgis.PyQt.QtCore import Qt, QTimer, QSize, pyqtSignal
+from qgis.PyQt.QtCore import Qt, QSize, pyqtSignal
 from qgis.PyQt.QtGui import QKeySequence, QShortcut
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QDockWidget,
     QHBoxLayout,
     QLineEdit,
     QPushButton,
-    QStyle,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -30,7 +28,6 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox,
 )
 
-from qgis.core import QgsMapLayer
 
 from .tree_utils import (
     ROLE_TYPE,
@@ -50,9 +47,8 @@ from .icons import (
     icon_add_group,
     icon_remove_group,
     icon_rename_group,
-    icon_for_layer,
 )
-from .tree_widget import BetterLayerTree, DROP_ON, DROP_ABOVE, DROP_BELOW
+from .tree_widget import BetterLayerTree
 
 
 class LayerOrderView(QDockWidget):
@@ -80,6 +76,7 @@ class LayerOrderView(QDockWidget):
     control_toggled = pyqtSignal(bool)
     remove_empty_toggled = pyqtSignal(bool)
     layer_visibility_toggled = pyqtSignal(str, bool)  # layer_id, checked
+    group_visibility_toggled = pyqtSignal(str, bool)  # group_id, checked (propagate to all child layers)
     item_double_clicked = pyqtSignal(str)             # item_id (group only — toggle expand)
     # drop_intent(moving_ids, target_id, position) — from BetterLayerTree
     drop_intent = pyqtSignal(list, str, str)
@@ -221,7 +218,14 @@ class LayerOrderView(QDockWidget):
             self.item_double_clicked.emit(item.data(0, ROLE_ID))
 
     def _on_item_changed(self, item, column):
-        """User toggled a checkbox — emit layer_visibility_toggled."""
+        """User toggled a checkbox — emit visibility signal.
+
+        For layers: emit layer_visibility_toggled(layer_id, checked).
+        For groups: emit group_visibility_toggled(group_id, checked) — the
+        ViewController propagates this to all child layers in the Model.
+        (Qt's ItemIsAutoTristate also propagates visually, but we route
+        through the Model explicitly for testability + QGIS sync.)
+        """
         if column != 0 or self._syncing:
             return
         t = item.data(0, ROLE_TYPE)
@@ -229,6 +233,12 @@ class LayerOrderView(QDockWidget):
             lid = item.data(0, ROLE_ID)
             checked = item.checkState(0) == Qt.CheckState.Checked
             self.layer_visibility_toggled.emit(lid, checked)
+        elif t == TYPE_GROUP:
+            gid = item.data(0, ROLE_ID)
+            # PartiallyChecked → treat as Checked (cycle forward)
+            state = item.checkState(0)
+            checked = state != Qt.CheckState.Unchecked
+            self.group_visibility_toggled.emit(gid, checked)
 
     def _on_context_menu(self, pos):
         if not self.is_control_enabled():
@@ -549,17 +559,6 @@ class LayerOrderView(QDockWidget):
                 it.setText(0, new_name)
             finally:
                 self._syncing = False
-
-    def move_item(self, item_id, new_parent_id, new_index):
-        """Move an item within the tree. Simplest correct approach: full rebuild.
-
-        For large trees this could be optimized to a targeted take/insert,
-        but correctness first.
-        """
-        # The ViewController should call rebuild_from_nodes after a move
-        # — this method is here for API completeness but the VC typically
-        # just rebuilds on ITEM_MOVED events.
-        pass  # See rebuild_from_nodes — VC calls that instead.
 
     def set_visibility(self, layer_id, visible):
         """Update a layer item's checkbox (from Model visibility change)."""

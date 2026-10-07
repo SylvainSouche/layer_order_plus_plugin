@@ -270,12 +270,21 @@ class LayerOrderModel:
         Emits EVENT_MODEL_LOADED (and a trailing EVENT_ORDER_CHANGED).
         Schema version handling: missing → v1 legacy; mismatched → still
         load as v1 (the format is forward-compatible so far).
+
+        If JSON parsing fails, the tree is cleared and a model_loaded event
+        is emitted (so listeners can rebuild an empty tree). This prevents
+        a corrupted project entry from crashing the plugin on load.
         """
         new_root: list[Node] = []
         if raw_json:
-            obj = json.loads(raw_json)
-            # Schema version check — we only have v1, but log if mismatched.
-            # (The Controller can decide to log a warning; the Model just loads.)
+            try:
+                obj = json.loads(raw_json)
+            except (json.JSONDecodeError, TypeError):
+                # Corrupted JSON — clear and emit so listeners rebuild empty
+                self._root = []
+                self._emit(EVENT_MODEL_LOADED, {})
+                self._emit(EVENT_ORDER_CHANGED, {})
+                return
             for top_node in obj.get("children", []):
                 built = self._build_node(top_node)
                 if built is not None:
