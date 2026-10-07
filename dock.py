@@ -788,15 +788,44 @@ class BetterLayerOrderDock(QDockWidget):
             parent.insertChild(idx, it)
         return it
 
-    def _populate_all_layers_top_level(self):
+    def _ordered_project_layers(self):
+        """
+        Return project layers in the order QGIS would actually draw them.
+
+        Preference (QualityOverhaul 1.2):
+          1. root.customLayerOrder()           — when hasCustomLayerOrder is True
+          2. root.layerOrder()                 — current legend/draw order
+          3. proj.mapLayers().values()         — final fallback (unordered)
+
+        Falls back silently and logs which path was taken, so the log tab
+        shows why a project opened in a particular order.
+        """
         proj = QgsProject.instance()
-        for lyr in proj.mapLayers().values():
+        root = proj.layerTreeRoot()
+        try:
+            if root.hasCustomLayerOrder():
+                clo = root.customLayerOrder() or []
+                if clo:
+                    _log(f"_ordered_project_layers: using customLayerOrder ({len(clo)} layers)")
+                    return list(clo)
+            if hasattr(root, "layerOrder"):
+                lo = root.layerOrder() or []
+                if lo:
+                    _log(f"_ordered_project_layers: using layerOrder ({len(lo)} layers)")
+                    return list(lo)
+        except Exception as e:
+            _log(f"_ordered_project_layers: order API failed ({e!r}); falling back to mapLayers", Qgis.Warning)
+        ml = list(proj.mapLayers().values())
+        _log(f"_ordered_project_layers: fallback to mapLayers ({len(ml)} layers, unordered)", Qgis.Warning)
+        return ml
+
+    def _populate_all_layers_top_level(self):
+        for lyr in self._ordered_project_layers():
             self._add_layer_item(None, lyr)
 
     def _append_missing_layers(self):
-        proj = QgsProject.instance()
         existing = set(self._iter_all_layer_ids())
-        for lyr in proj.mapLayers().values():
+        for lyr in self._ordered_project_layers():
             if lyr.id() not in existing:
                 self._add_layer_item(None, lyr)
 
