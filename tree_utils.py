@@ -173,3 +173,66 @@ def prune_empty_groups(tree: QTreeWidget) -> int:
                 continue
         i += 1
     return removed
+
+
+def apply_name_filter(tree: QTreeWidget, needle: str) -> None:
+    """Case-insensitive substring filter on layer/group names.
+
+    Items are hidden (setHidden), not removed, so the tree state and undo
+    stack are unaffected. A group is shown if it matches OR any descendant
+    matches; groups that don't match themselves but have matching descendants
+    are expanded so the match is visible.
+
+    Empty needle clears the filter (unhide everything).
+
+    Pure tree manipulation — does NOT touch signals or undo (the caller's job
+    to wrap in blockSignals if needed).
+    """
+    needle = (needle or "").strip().lower()
+    if not needle:
+        def unhide(it):
+            try:
+                it.setHidden(False)
+            except RuntimeError:
+                return
+            for i in range(it.childCount()):
+                unhide(it.child(i))
+        for i in range(tree.topLevelItemCount()):
+            unhide(tree.topLevelItem(i))
+        return
+
+    def matches(it):
+        try:
+            return needle in (it.text(0) or "").lower()
+        except RuntimeError:
+            return False
+
+    def filter_walk(it, ancestor_matches=False):
+        """Return True if `it` or any descendant matches; set hidden accordingly.
+
+        ancestor_matches: a parent (or ancestor) matched the filter — so this
+        item should be shown regardless of its own match status, AND its
+        descendants should be shown too (the whole subtree is visible).
+        """
+        try:
+            self_match = matches(it)
+        except RuntimeError:
+            return False
+        should_show = ancestor_matches or self_match
+        any_descendant_match = False
+        for i in range(it.childCount()):
+            if filter_walk(it.child(i), ancestor_matches=should_show):
+                any_descendant_match = True
+        # Show if self matches, an ancestor matches, or any descendant matches
+        final_show = should_show or any_descendant_match
+        try:
+            it.setHidden(not final_show)
+            # Expand groups that have matching descendants so the match is visible
+            if final_show and not self_match and any_descendant_match:
+                it.setExpanded(True)
+        except RuntimeError:
+            pass
+        return final_show
+
+    for i in range(tree.topLevelItemCount()):
+        filter_walk(tree.topLevelItem(i), ancestor_matches=False)

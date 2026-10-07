@@ -7,3 +7,9 @@ __pycache__/
 .vscode/
 *.qgz
 *.qgs~
+
+# Locally-extracted libegl1 for headless PyQt6 tests
+# CI installs libegl1 via apt; this vendor dir is only for environments
+# without root (like the dev container this plugin was developed in).
+tests/vendor/
+.pytest_cache/
