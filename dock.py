@@ -10,6 +10,7 @@ from qgis.PyQt.QtWidgets import (
     QApplication,
     QDockWidget,
     QHBoxLayout,
+    QLineEdit,
     QPushButton,
     QShortcut,
     QStyle,
@@ -564,6 +565,18 @@ class BetterLayerOrderDock(QDockWidget):
         head.addWidget(self.btn_del_group)
         head.addStretch(1)
 
+        # QualityOverhaul 3.3: case-insensitive name substring filter.
+        # Hidden items stay in the tree (just not visible); clearing the
+        # field restores the full tree.
+        self.ed_filter = QLineEdit()
+        self.ed_filter.setPlaceholderText("Filter by name…")
+        self.ed_filter.setClearButtonEnabled(True)
+        self.ed_filter.setToolTip(
+            "Case-insensitive substring filter on layer and group names.\n"
+            "Items are hidden, not removed — clear to restore."
+        )
+        lay.addWidget(self.ed_filter)
+
         self.tree = BetterLayerTree()
         self.tree.setHeaderHidden(True)
         # QualityOverhaul 3.5: explain drop rules to the user.
@@ -625,6 +638,7 @@ class BetterLayerOrderDock(QDockWidget):
         self.btn_del_group.clicked.connect(self.delete_selected_groups)
         self.chk_control.toggled.connect(self._on_control_toggled)
         self.chk_remove_empty.toggled.connect(self._on_remove_empty_toggled)
+        self.ed_filter.textChanged.connect(self._on_filter_changed)
 
         self.tree.model().rowsMoved.connect(self._on_rows_moved)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
@@ -677,11 +691,18 @@ class BetterLayerOrderDock(QDockWidget):
     def _apply_control_ui_state(self, enabled: bool):
         self.tree.setEnabled(enabled)
         self.btn_add_group.setEnabled(enabled)
+        # Filter box also follows control state — filtering an inactive tree
+        # is meaningless.
+        self.ed_filter.setEnabled(enabled)
         if enabled:
             self._update_group_actions_enabled()
         else:
             self.btn_rename_group.setEnabled(False)
             self.btn_del_group.setEnabled(False)
+            # Clear filter so the tree is fully visible when re-enabled
+            self.ed_filter.blockSignals(True)
+            self.ed_filter.clear()
+            self.ed_filter.blockSignals(False)
         self.tree.setStyleSheet("" if enabled else "QTreeWidget { color: palette(disabled); }")
         # The empty-group cleanup checkbox follows control state — meaningless
         # when the panel is not driving order.
@@ -713,6 +734,63 @@ class BetterLayerOrderDock(QDockWidget):
 
     def _should_remove_empty_groups(self) -> bool:
         return bool(self.chk_remove_empty.isChecked())
+
+    # ==================================================================
+    # name filter (QualityOverhaul 3.3)
+    # ==================================================================
+    def _on_filter_changed(self, text: str):
+        """Case-insensitive substring filter on layer/group names.
+
+        Items are hidden (setHidden), not removed, so the tree state and undo
+        stack are unaffected. A group is shown if it matches OR any descendant
+        matches; groups that match are expanded so the match is visible.
+        """
+        needle = (text or "").strip().lower()
+        if not needle:
+            # Restore: clear hidden on every item
+            def unhide(it):
+                try:
+                    it.setHidden(False)
+                except RuntimeError:
+                    return
+                for i in range(it.childCount()):
+                    unhide(it.child(i))
+            for i in range(self.tree.topLevelItemCount()):
+                unhide(self.tree.topLevelItem(i))
+            return
+
+        def matches(it):
+            try:
+                return needle in (it.text(0) or "").lower()
+            except RuntimeError:
+                return False
+
+        def filter_walk(it):
+            """Return True if `it` or any descendant matches; set hidden accordingly."""
+            try:
+                self_match = matches(it)
+            except RuntimeError:
+                return False
+            any_descendant_match = False
+            for i in range(it.childCount()):
+                if filter_walk(it.child(i)):
+                    any_descendant_match = True
+            should_show = self_match or any_descendant_match
+            try:
+                it.setHidden(not should_show)
+                # Expand matching groups so descendants are visible
+                if should_show and not self_match and any_descendant_match:
+                    it.setExpanded(True)
+            except RuntimeError:
+                pass
+            return should_show
+
+        self.tree.blockSignals(True)
+        try:
+            for i in range(self.tree.topLevelItemCount()):
+                filter_walk(self.tree.topLevelItem(i))
+        finally:
+            self.tree.blockSignals(False)
 
     def _prune_empty_groups(self):
         """Walk the tree and remove group nodes with childCount() == 0.
