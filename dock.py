@@ -571,6 +571,15 @@ class BetterLayerOrderDock(QDockWidget):
         )
         lay.addWidget(self.chk_control)
 
+        # QualityOverhaul 2.2: optional cleanup of empty groups after layer remove.
+        # Persisted per-project via QgsProject entry "removeEmptyGroups" (default: True).
+        self.chk_remove_empty = QCheckBox("Remove empty groups on layer delete")
+        self.chk_remove_empty.setToolTip(
+            "When checked, order groups that become empty after their last layer is "
+            "removed are deleted automatically. When unchecked, empty groups are kept."
+        )
+        lay.addWidget(self.chk_remove_empty)
+
         # Local shortcuts when the dock has focus (plugin also hooks Edit menu / app shortcuts)
         for seq, slot in (
             (QKeySequence.StandardKey.Undo, self.undo_stack.undo),
@@ -589,6 +598,7 @@ class BetterLayerOrderDock(QDockWidget):
         self.btn_rename_group.clicked.connect(self.rename_selected_group)
         self.btn_del_group.clicked.connect(self.delete_selected_groups)
         self.chk_control.toggled.connect(self._on_control_toggled)
+        self.chk_remove_empty.toggled.connect(self._on_remove_empty_toggled)
 
         self.tree.model().rowsMoved.connect(self._on_rows_moved)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
@@ -600,9 +610,11 @@ class BetterLayerOrderDock(QDockWidget):
 
         self._update_group_actions_enabled()
         self._sync_control_from_project()
+        self._sync_remove_empty_from_project()
 
         _log(f"dock initialised; chk_control exists={hasattr(self, 'chk_control')}; "
-             f"is_control_enabled={self.is_control_enabled()}")
+             f"is_control_enabled={self.is_control_enabled()}; "
+             f"remove_empty_groups={self._should_remove_empty_groups()}")
 
     # ==================================================================
     # control rendering order (stock Layer Order parity)
@@ -643,6 +655,71 @@ class BetterLayerOrderDock(QDockWidget):
             self.btn_rename_group.setEnabled(False)
             self.btn_del_group.setEnabled(False)
         self.tree.setStyleSheet("" if enabled else "QTreeWidget { color: palette(disabled); }")
+        # The empty-group cleanup checkbox follows control state — meaningless
+        # when the panel is not driving order.
+        self.chk_remove_empty.setEnabled(enabled)
+
+    # ==================================================================
+    # remove-empty-groups setting (QualityOverhaul 2.2)
+    # ==================================================================
+    def _on_remove_empty_toggled(self, checked: bool):
+        if self._loading:
+            return
+        try:
+            QgsProject.instance().writeEntry("BetterLayerOrder", "removeEmptyGroups", bool(checked))
+            QgsProject.instance().setDirty(True)
+            _log(f"_on_remove_empty_toggled: removeEmptyGroups={checked}")
+        except Exception as e:
+            _log(f"_on_remove_empty_toggled: failed to persist: {e!r}", Qgis.Warning)
+
+    def _sync_remove_empty_from_project(self):
+        """Read the persisted setting; default True when missing."""
+        try:
+            val, ok = QgsProject.instance().readEntry("BetterLayerOrder", "removeEmptyGroups", "1")
+            checked = bool(int(val)) if ok and val not in ("", None) else True
+        except Exception:
+            checked = True
+        self.chk_remove_empty.blockSignals(True)
+        self.chk_remove_empty.setChecked(checked)
+        self.chk_remove_empty.blockSignals(False)
+
+    def _should_remove_empty_groups(self) -> bool:
+        return bool(self.chk_remove_empty.isChecked())
+
+    def _prune_empty_groups(self):
+        """Walk the tree and remove group nodes with childCount() == 0.
+
+        Top-level groups and nested groups alike. Returns the count removed.
+        """
+        removed = 0
+
+        def walk(parent):
+            nonlocal removed
+            i = 0
+            while i < parent.childCount():
+                ch = parent.child(i)
+                if ch.data(0, ROLE_TYPE) == TYPE_GROUP:
+                    walk(ch)  # recurse first
+                    if ch.childCount() == 0:
+                        parent.takeChild(i)
+                        removed += 1
+                        continue
+                i += 1
+
+        # Top-level
+        i = 0
+        while i < self.tree.topLevelItemCount():
+            top = self.tree.topLevelItem(i)
+            if top.data(0, ROLE_TYPE) == TYPE_GROUP:
+                walk(top)
+                if top.childCount() == 0:
+                    self.tree.takeTopLevelItem(i)
+                    removed += 1
+                    continue
+            i += 1
+        if removed:
+            _log(f"_prune_empty_groups: removed {removed} empty group(s)")
+        return removed
 
     # ==================================================================
     # external control
@@ -1197,6 +1274,7 @@ class BetterLayerOrderDock(QDockWidget):
             self.tree.blockSignals(False)
             self._loading = False
             self._sync_control_from_project()
+            self._sync_remove_empty_from_project()
 
     # ==================================================================
     # layer add/remove (ANCHOR-BASED)
@@ -1281,6 +1359,9 @@ class BetterLayerOrderDock(QDockWidget):
                         self.tree.takeTopLevelItem(i)
                     elif t == TYPE_GROUP:
                         prune(top)
+                # QualityOverhaul 2.2: optionally drop groups that became empty.
+                if self._should_remove_empty_groups():
+                    self._prune_empty_groups()
             finally:
                 self.tree.blockSignals(False)
                 self._loading = False
