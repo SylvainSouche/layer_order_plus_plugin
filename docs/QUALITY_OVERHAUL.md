@@ -1,3 +1,11 @@
+## Status as of 1.0.12
+
+Completed since initial review: Qt6 port, map undo, bundled icons, Edit-menu undo, drop-on-layer grouping, unique names, expand-on-create, rename via dialog/toolbar/context, multi-delete, CI/Makefile/VERSION.
+
+Still open toward 1.1.0: dual undo on drag, initial order seed, layer rename sync, JSON schema version, visibility toggles, automated GUI tests.
+
+---
+
 # Layer Order Plus — Quality Overhaul Plan
 
 Step-by-step plan to address every finding from the code review, plus fixes already applied (Qt6, undo→map order, icons).
