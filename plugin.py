@@ -69,6 +69,10 @@ class BetterLayerOrderPlugin(QObject):
 
         if self.dock:
             self._save_tree_json(self.dock._serialize_tree())
+            try:
+                self.dock._disconnect_all_layer_renames()
+            except Exception:
+                pass
             self.dock.deleteLater()
             self.dock = None
 
