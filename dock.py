@@ -1209,6 +1209,13 @@ class BetterLayerOrderDock(QDockWidget):
             return
         if self._in_undo or self._loading:
             return
+        # Dual-undo guard (QualityOverhaul 1.1 / 4.5):
+        # Custom dropEvent already pushed undo via _on_tree_changed_external.
+        # rowsMoved also fires because take/insert manipulates the model, so
+        # without this guard a single drag would push TWO undo entries.
+        if getattr(self.tree, "_just_custom_dropped", False):
+            _log("_on_rows_moved: skipped (custom drop already pushed undo)")
+            return
         # InternalMove not always triggers our custom drop path; take snapshot-based undo.
         before = self._snapshot or self._serialize_tree()
         after = self._serialize_tree()
