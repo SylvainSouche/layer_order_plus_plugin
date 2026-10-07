@@ -173,7 +173,7 @@ class BetterLayerTree(QTreeWidget):
     """
     Drop rules:
       - OnItem on GROUP  -> move items to TOP of that group
-      - OnItem on LAYER  -> move items ABOVE that layer (same parent as target layer)
+      - OnItem on LAYER  -> create a new group (default name), put target + dropped items in it
       - AboveItem        -> move items ABOVE target (same parent as target)
       - BelowItem        -> move items BELOW target (same parent as target)
     Safeguards:
@@ -261,13 +261,71 @@ class BetterLayerTree(QTreeWidget):
 
             tt = target.data(0, ROLE_TYPE)
 
+            self._just_custom_dropped = True
+
+            # --- OnItem + LAYER: create new group with target + dropped items ---
+            if pos == QAbstractItemView.DropIndicatorPosition.OnItem and tt == TYPE_LAYER:
+                # Ignore if target is among movers (already checked) or would cycle
+                for it in moving:
+                    if self._is_ancestor(it, target):
+                        e.ignore()
+                        self._just_custom_dropped = False
+                        return
+
+                moving.sort(key=self._path_key)
+
+                # Where the new group will sit (target's current slot)
+                grp_parent = target.parent()
+                grp_index = self._index_in_parent(target)
+
+                # Adjust index if we remove movers that sit before the target in same parent
+                for it in moving:
+                    if it.parent() == grp_parent and self._index_in_parent(it) < grp_index:
+                        grp_index -= 1
+
+                # Take movers out of the tree first
+                taken = []
+                for it in reversed(moving):
+                    taken.append(self._take_item(it))
+                taken.reverse()
+
+                # Take target out (still a valid QTreeWidgetItem)
+                target_taken = self._take_item(target)
+
+                # Build group
+                grp = QTreeWidgetItem(["New group"])
+                grp.setData(0, ROLE_TYPE, TYPE_GROUP)
+                grp.setData(0, ROLE_ID, _new_group_id())
+                try:
+                    grp.setFlags(grp.flags() | Qt.ItemFlag.ItemIsEditable)
+                except Exception:
+                    grp.setFlags(grp.flags() | Qt.ItemIsEditable)
+                grp.setIcon(0, _icon_group())
+
+                self._insert_item(grp_parent, grp_index, grp)
+
+                # Children: target first, then dropped items (stable order)
+                grp.addChild(target_taken)
+                for it in taken:
+                    grp.addChild(it)
+
+                grp.setExpanded(True)
+                self.clearSelection()
+                grp.setSelected(True)
+                self.setCurrentItem(grp)
+
+                e.accept()
+                after = self._state_provider()
+                if self._after_drop_cb:
+                    self._after_drop_cb(before, after)
+                QTimer.singleShot(0, lambda: setattr(self, "_just_custom_dropped", False))
+                return
+
+            # --- OnItem + GROUP / Above / Below: classic move ---
             if pos == QAbstractItemView.DropIndicatorPosition.OnItem:
-                if tt == TYPE_GROUP:
-                    dest_parent = target
-                    dest_index = 0
-                else:
-                    dest_parent = target.parent()
-                    dest_index = self._index_in_parent(target)
+                # group target: move into top of group
+                dest_parent = target
+                dest_index = 0
             elif pos == QAbstractItemView.DropIndicatorPosition.AboveItem:
                 dest_parent = target.parent()
                 dest_index = self._index_in_parent(target)
@@ -280,8 +338,6 @@ class BetterLayerTree(QTreeWidget):
             for it in moving:
                 if it.parent() == dest_parent and self._index_in_parent(it) < dest_index:
                     dest_index -= 1
-
-            self._just_custom_dropped = True
 
             taken = []
             for it in reversed(moving):
