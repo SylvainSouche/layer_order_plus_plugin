@@ -511,6 +511,13 @@ class BetterLayerOrderDock(QDockWidget):
         self._snapshot = ""
         self.undo_stack = QUndoStack(self)
 
+        # ---------------- layer rename sync (QualityOverhaul 2.1) ----------------
+        # Map layer_id → (QTreeWidgetItem, layer) so we can update the tree label
+        # when the user renames a layer in the Layers panel.
+        # We use the layer's nameChanged signal; connections are stored so we can
+        # disconnect on unload / layer removal.
+        self._layer_rename_connections = {}  # layer_id → (layer, bound_slot)
+
         # safe apply debounce
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
@@ -651,6 +658,8 @@ class BetterLayerOrderDock(QDockWidget):
     def clear_tree_ui(self):
         self._loading = True
         self.tree.blockSignals(True)
+        # Drop rename listeners — tree is being wiped.
+        self._disconnect_all_layer_renames()
         try:
             self.tree.clear()
             self._snapshot = ""
@@ -779,6 +788,7 @@ class BetterLayerOrderDock(QDockWidget):
             self.tree.addTopLevelItem(it)
         else:
             parent.addChild(it)
+        self._connect_layer_rename(lyr)
         return it
 
     def _insert_layer_item(self, parent: QTreeWidgetItem, idx: int, lyr):
@@ -791,7 +801,58 @@ class BetterLayerOrderDock(QDockWidget):
             self.tree.insertTopLevelItem(idx, it)
         else:
             parent.insertChild(idx, it)
+        self._connect_layer_rename(lyr)
         return it
+
+    # ------------------------------------------------------------------
+    # Layer rename sync (QualityOverhaul 2.1)
+    # ------------------------------------------------------------------
+    def _connect_layer_rename(self, lyr):
+        """Connect layer.nameChanged once per layer; idempotent."""
+        if lyr is None:
+            return
+        lid = lyr.id()
+        if lid in self._layer_rename_connections:
+            return  # already connected
+        try:
+            slot = lambda *_a, _lid=lid, _lyr=lyr: self._on_layer_renamed(_lid, _lyr)
+            lyr.nameChanged.connect(slot)
+            self._layer_rename_connections[lid] = (lyr, slot)
+        except Exception as e:
+            _log(f"_connect_layer_rename: failed for {lid}: {e!r}", Qgis.Warning)
+
+    def _disconnect_layer_rename(self, lid):
+        """Disconnect (and forget) the rename listener for a layer id."""
+        entry = self._layer_rename_connections.pop(lid, None)
+        if entry is None:
+            return
+        lyr, slot = entry
+        try:
+            lyr.nameChanged.disconnect(slot)
+        except Exception:
+            pass  # already disconnected or layer gone
+
+    def _on_layer_renamed(self, lid, lyr):
+        """Update the tree label when a layer is renamed externally."""
+        try:
+            new_name = lyr.name()
+        except RuntimeError:
+            # Layer was deleted; the on_layers_removed path will clean up.
+            return
+        it = self._find_layer_item(lid)
+        if it is None:
+            return
+        try:
+            if it.text(0) != new_name:
+                it.setText(0, new_name)
+                _log(f"_on_layer_renamed: {lid} → '{new_name}'")
+        except RuntimeError:
+            pass  # item already gone
+
+    def _disconnect_all_layer_renames(self):
+        """Disconnect every rename listener — used on unload / project clear."""
+        for lid in list(self._layer_rename_connections.keys()):
+            self._disconnect_layer_rename(lid)
 
     def _ordered_project_layers(self):
         """
@@ -1066,6 +1127,9 @@ class BetterLayerOrderDock(QDockWidget):
         _log(f"load_from_project: json_len={len(raw_json) if raw_json else 0}")
         self._loading = True
         self.tree.blockSignals(True)
+        # Drop rename listeners from the previous tree — they'll be reconnected
+        # as items are built below.
+        self._disconnect_all_layer_renames()
         try:
             self.tree.clear()
             if not raw_json:
@@ -1189,6 +1253,10 @@ class BetterLayerOrderDock(QDockWidget):
         try:
             before = self._serialize_tree()
             remove_set = set(layer_ids or [])
+
+            # Disconnect rename listeners for the layers being removed.
+            for lid in remove_set:
+                self._disconnect_layer_rename(lid)
 
             def prune(parent):
                 i = 0
