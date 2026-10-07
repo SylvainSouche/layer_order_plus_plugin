@@ -78,6 +78,7 @@ class LayerOrderController(QObject):
         self._connect_qgis_signals()
         self._connect_view_signals()
         self._connect_vc_signals()
+        self._connect_layer_tree_visibility()
 
         # Sync initial state from QGIS
         self._sync_control_from_project()
@@ -115,6 +116,31 @@ class LayerOrderController(QObject):
     def _connect_vc_signals(self):
         # ViewController emits order_changed when the Model's flattened order changes
         self._vc.order_changed.connect(self._on_order_changed)
+
+    def _connect_layer_tree_visibility(self):
+        """Connect to the QGIS layer tree root's visibilityChanged signal.
+
+        This catches GROUP visibility changes in the Layers panel (which
+        don't always fire per-layer visibilityChanged). When a group is
+        toggled, we refresh the effective visibility of all layers.
+        """
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            # visibilityChanged on the root fires when any node's visibility changes
+            root.visibilityChanged.connect(self._on_tree_visibility_changed)
+        except Exception as e:
+            _log(f"_connect_layer_tree_visibility: failed: {e!r}", Qgis.Warning)
+
+    def _on_tree_visibility_changed(self, node):
+        """A node's visibility changed in the Layers panel → refresh all layers.
+
+        When a group is toggled, we need to update all child layers' effective
+        visibility in the Model (and thus the View checkboxes).
+        """
+        # Refresh effective visibility for all layers in the Model
+        for layer_id in list(self._vc.get_flattened_layer_ids()):
+            visible = self._get_effective_visibility(layer_id)
+            self._vc.set_layer_visibility(layer_id, visible)
 
     # ==================================================================
     # QGIS layer signal handlers
@@ -229,15 +255,41 @@ class LayerOrderController(QObject):
         for lid in list(self._visibility_connections.keys()):
             self._disconnect_layer_visibility(lid)
 
-    def _on_layer_visibility_external(self, lid):
-        """Layer visibility changed in the Layers panel → update Model."""
-        ltl = self._find_layer_tree_layer(lid)
+    def _get_effective_visibility(self, layer_id):
+        """Return the EFFECTIVE visibility of a layer (considering parent groups).
+
+        QGIS's `itemVisibilityChecked()` returns the individual checkbox state,
+        not the effective visibility. If a parent group is unchecked, the layer
+        is effectively invisible even if its own checkbox is checked.
+        We walk up the QgsLayerTree to compute the true effective state.
+        """
+        ltl = self._find_layer_tree_layer(layer_id)
         if ltl is None:
-            return
+            return True
         try:
-            visible = bool(ltl.itemVisibilityChecked())
+            if not ltl.itemVisibilityChecked():
+                return False
+            # Walk up the QGIS layer tree checking parent group visibility
+            node = ltl.parent()
+            while node is not None:
+                if hasattr(node, 'itemVisibilityChecked'):
+                    try:
+                        if not node.itemVisibilityChecked():
+                            return False
+                    except Exception:
+                        pass
+                node = node.parent()
+            return True
         except RuntimeError:
-            return
+            return True
+
+    def _on_layer_visibility_external(self, lid):
+        """Layer visibility changed in the Layers panel → update Model.
+
+        Uses EFFECTIVE visibility (considering parent group visibility) so
+        that a layer inside an unchecked group shows as unchecked in Plus.
+        """
+        visible = self._get_effective_visibility(lid)
         self._vc.set_layer_visibility(lid, visible)
 
     def _on_layer_visibility_toggled(self, layer_id, checked):
@@ -363,6 +415,11 @@ class LayerOrderController(QObject):
             proj = QgsProject.instance()
             proj.layersAdded.disconnect(self._on_layers_added)
             proj.layersWillBeRemoved.disconnect(self._on_layers_removed)
+        except Exception:
+            pass
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            root.visibilityChanged.disconnect(self._on_tree_visibility_changed)
         except Exception:
             pass
 

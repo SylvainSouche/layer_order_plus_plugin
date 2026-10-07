@@ -17,7 +17,7 @@ the Controller) to pass layer icons to the View when building layer items.
 import json
 import traceback
 
-from qgis.PyQt.QtCore import QObject, pyqtSignal
+from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QUndoStack
 
 from qgis.core import Qgis
@@ -350,10 +350,24 @@ class ViewController(QObject):
     def _on_drop_intent(self, moving_ids, target_id, position):
         """Translate semantic drop intent to Model mutations.
 
-        Insertion order: items are inserted at incrementing indices so the
-        relative order of the moved items is preserved (first moved item
-        ends up first in the destination).
+        DEFERRED to the next event loop iteration via QTimer.singleShot(0).
+        This is critical: if we mutate the Model synchronously inside
+        dropEvent, each move_item triggers ITEM_MOVED → _rebuild_view_from_model
+        which clears+rebuilds the QTreeWidget WHILE Qt's DnD state machine is
+        still active. That corrupts the tree (lost items, broken structure).
+        Deferring lets dropEvent return cleanly first.
         """
+        if self._in_undo:
+            return
+        # Capture the ids — the QTreeWidgetItems they came from may be gone
+        # by the time the deferred handler runs.
+        ids = list(moving_ids)
+        tid = target_id
+        pos = position
+        QTimer.singleShot(0, lambda: self._handle_drop_intent(ids, tid, pos))
+
+    def _handle_drop_intent(self, moving_ids, target_id, position):
+        """Actual drop handling — runs on next event loop iteration."""
         if self._in_undo:
             return
         try:
