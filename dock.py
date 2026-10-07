@@ -58,6 +58,11 @@ TYPE_LAYER = "layer"
 #     layers carry id. Older saved trees (no "version" field) are treated as v1.
 TREE_JSON_SCHEMA_VERSION = 1
 
+# QualityOverhaul 3.1: visibility checkbox sync.
+# We track layer_id → QgsMapLayer for visibility prop, and use a guard flag
+# to suppress recursive updates when we are the source of the change.
+ROLE_VISIBILITY = Qt.ItemDataRole.UserRole + 3  # cached "user-toggle-in-progress" marker
+
 
 
 def _new_group_id():
@@ -407,10 +412,11 @@ class BetterLayerTree(QTreeWidget):
                 grp.setData(0, ROLE_TYPE, TYPE_GROUP)
                 grp.setData(0, ROLE_ID, _new_group_id())
                 try:
-                    grp.setFlags(grp.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
                 except Exception:
-                    grp.setFlags(grp.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
                 grp.setIcon(0, _icon_group())
+                grp.setCheckState(0, Qt.CheckState.Checked)  # will be recomputed once children are added
 
                 self._insert_item(grp_parent, grp_index, grp)
 
@@ -518,6 +524,15 @@ class BetterLayerOrderDock(QDockWidget):
         # disconnect on unload / layer removal.
         self._layer_rename_connections = {}  # layer_id → (layer, bound_slot)
 
+        # ---------------- visibility checkbox sync (QualityOverhaul 3.1) ----------------
+        # When True, itemChanged handlers ignore check-state changes (we are the
+        # source, so we don't need to propagate back to the layer tree).
+        self._in_visibility_sync = False
+        # Per-layer visibilityChanged connections: layer_id → (layer_tree_layer, slot)
+        # We listen on QgsLayerTreeLayer (not QgsMapLayer) because that's where
+        # the Layers panel toggles.
+        self._visibility_connections = {}
+
         # safe apply debounce
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
@@ -614,6 +629,8 @@ class BetterLayerOrderDock(QDockWidget):
         self.tree.model().rowsMoved.connect(self._on_rows_moved)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+        # QualityOverhaul 3.1: visibility checkbox propagation
+        self.tree.itemChanged.connect(self._on_tree_item_changed)
 
         # anchor capture + toolbar enable state
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
@@ -746,8 +763,9 @@ class BetterLayerOrderDock(QDockWidget):
     def clear_tree_ui(self):
         self._loading = True
         self.tree.blockSignals(True)
-        # Drop rename listeners — tree is being wiped.
+        # Drop rename + visibility listeners — tree is being wiped.
         self._disconnect_all_layer_renames()
+        self._disconnect_all_layer_visibilities()
         try:
             self.tree.clear()
             self._snapshot = ""
@@ -870,26 +888,31 @@ class BetterLayerOrderDock(QDockWidget):
         it = QTreeWidgetItem([lyr.name()])
         it.setData(0, ROLE_TYPE, TYPE_LAYER)
         it.setData(0, ROLE_ID, lyr.id())
-        it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
         it.setIcon(0, _icon_for_layer(lyr))
+        # QualityOverhaul 3.1: initial visibility from the layer tree.
+        self._set_layer_item_check_state(it, lyr)
         if parent is None:
             self.tree.addTopLevelItem(it)
         else:
             parent.addChild(it)
         self._connect_layer_rename(lyr)
+        self._connect_layer_visibility(lyr)
         return it
 
     def _insert_layer_item(self, parent: QTreeWidgetItem, idx: int, lyr):
         it = QTreeWidgetItem([lyr.name()])
         it.setData(0, ROLE_TYPE, TYPE_LAYER)
         it.setData(0, ROLE_ID, lyr.id())
-        it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
         it.setIcon(0, _icon_for_layer(lyr))
+        self._set_layer_item_check_state(it, lyr)
         if parent is None:
             self.tree.insertTopLevelItem(idx, it)
         else:
             parent.insertChild(idx, it)
         self._connect_layer_rename(lyr)
+        self._connect_layer_visibility(lyr)
         return it
 
     # ------------------------------------------------------------------
@@ -941,6 +964,122 @@ class BetterLayerOrderDock(QDockWidget):
         """Disconnect every rename listener — used on unload / project clear."""
         for lid in list(self._layer_rename_connections.keys()):
             self._disconnect_layer_rename(lid)
+
+    # ------------------------------------------------------------------
+    # Visibility checkbox sync (QualityOverhaul 3.1)
+    # ------------------------------------------------------------------
+    def _find_layer_tree_layer(self, layer_id):
+        """Return the QgsLayerTreeLayer for a layer id, or None."""
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            return root.findLayer(layer_id)
+        except Exception:
+            return None
+
+    def _set_layer_item_check_state(self, item, lyr):
+        """Initialise a layer item's check state from the layer tree."""
+        try:
+            ltl = self._find_layer_tree_layer(lyr.id())
+            visible = bool(ltl.itemVisibilityChecked()) if ltl is not None else True
+        except Exception:
+            visible = True
+        # Suppress itemChanged during programmatic state set
+        was = self._in_visibility_sync
+        self._in_visibility_sync = True
+        try:
+            item.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
+        finally:
+            self._in_visibility_sync = was
+
+    def _connect_layer_visibility(self, lyr):
+        """Connect QgsLayerTreeLayer.visibilityChanged for this layer (idempotent)."""
+        if lyr is None:
+            return
+        lid = lyr.id()
+        if lid in self._visibility_connections:
+            return
+        ltl = self._find_layer_tree_layer(lid)
+        if ltl is None:
+            return
+        try:
+            slot = lambda *_a, _lid=lid: self._on_layer_visibility_external(_lid)
+            ltl.visibilityChanged.connect(slot)
+            self._visibility_connections[lid] = (ltl, slot)
+        except Exception as e:
+            _log(f"_connect_layer_visibility: failed for {lid}: {e!r}", Qgis.Warning)
+
+    def _disconnect_layer_visibility(self, lid):
+        entry = self._visibility_connections.pop(lid, None)
+        if entry is None:
+            return
+        ltl, slot = entry
+        try:
+            ltl.visibilityChanged.disconnect(slot)
+        except Exception:
+            pass
+
+    def _disconnect_all_layer_visibilities(self):
+        for lid in list(self._visibility_connections.keys()):
+            self._disconnect_layer_visibility(lid)
+
+    def _on_layer_visibility_external(self, lid):
+        """A layer's visibility changed in the Layers panel — sync the tree item."""
+        if self._in_visibility_sync:
+            return
+        it = self._find_layer_item(lid)
+        if it is None:
+            return
+        ltl = self._find_layer_tree_layer(lid)
+        if ltl is None:
+            return
+        try:
+            visible = bool(ltl.itemVisibilityChecked())
+        except RuntimeError:
+            return
+        self._in_visibility_sync = True
+        try:
+            it.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
+            # Group tri-state is updated automatically by Qt (ItemIsAutoTristate).
+        finally:
+            self._in_visibility_sync = False
+
+    def _on_tree_item_changed(self, item, column):
+        """Handle user checkbox toggles. Propagate to the layer tree.
+
+        Note: with ItemIsAutoTristate on groups, Qt propagates parent toggles
+        to children automatically and fires itemChanged for each child layer.
+        So we only need to handle TYPE_LAYER here — group toggles resolve
+        themselves through the per-layer handlers.
+        """
+        if column != 0:
+            return
+        if self._in_visibility_sync:
+            return
+        t = item.data(0, ROLE_TYPE)
+        if t == TYPE_LAYER:
+            self._on_layer_check_toggled(item)
+        # Group check-state changes are driven by auto-tristate and resolved
+        # via the per-layer itemChanged fires that follow.
+
+    def _on_layer_check_toggled(self, item):
+        lid = item.data(0, ROLE_ID)
+        checked = item.checkState(0) == Qt.CheckState.Checked
+        ltl = self._find_layer_tree_layer(lid)
+        if ltl is None:
+            return
+        try:
+            ltl.setItemVisibilityChecked(checked)
+            # Trigger a map refresh via the layer tree (QGIS handles canvas refresh)
+            try:
+                root = QgsProject.instance().layerTreeRoot()
+                root.emitVisibilityChanged()
+            except Exception:
+                pass
+            _log(f"_on_layer_check_toggled: {lid} visible={checked}")
+        except Exception as e:
+            _log(f"_on_layer_check_toggled FAILED: {e!r}", Qgis.Critical)
+            return
+        # Group tri-state is updated automatically by Qt (ItemIsAutoTristate).
 
     def _ordered_project_layers(self):
         """
@@ -1008,8 +1147,12 @@ class BetterLayerOrderDock(QDockWidget):
         grp = QTreeWidgetItem([name])
         grp.setData(0, ROLE_TYPE, TYPE_GROUP)
         grp.setData(0, ROLE_ID, _new_group_id())
-        grp.setFlags(grp.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        try:
+            grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
+        except Exception:
+            grp.setFlags((grp.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
         grp.setIcon(0, _icon_group())
+        grp.setCheckState(0, Qt.CheckState.Checked)  # recomputed once children added
 
         anchor = self._resolve_anchor_item()
         if anchor is not None:
@@ -1287,9 +1430,10 @@ class BetterLayerOrderDock(QDockWidget):
         _log(f"load_from_project: json_len={len(raw_json) if raw_json else 0}")
         self._loading = True
         self.tree.blockSignals(True)
-        # Drop rename listeners from the previous tree — they'll be reconnected
-        # as items are built below.
+        # Drop rename + visibility listeners from the previous tree — they'll
+        # be reconnected as items are built below.
         self._disconnect_all_layer_renames()
+        self._disconnect_all_layer_visibilities()
         try:
             self.tree.clear()
             if not raw_json:
@@ -1326,8 +1470,12 @@ class BetterLayerOrderDock(QDockWidget):
                     it = QTreeWidgetItem([node.get("name", "Group")])
                     it.setData(0, ROLE_TYPE, TYPE_GROUP)
                     it.setData(0, ROLE_ID, node.get("id", _new_group_id()))
-                    it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    try:
+                        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate) & ~Qt.ItemFlag.ItemIsEditable)
+                    except Exception:
+                        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
                     it.setIcon(0, _icon_group())
+                    it.setCheckState(0, Qt.CheckState.Checked)  # auto-tristate recomputes once children are added
                     add_child(parent, it)
                     # Default to expanded=True for legacy saves (matches pre-1.0.19 behaviour);
                     # otherwise honour the saved state.
@@ -1415,9 +1563,10 @@ class BetterLayerOrderDock(QDockWidget):
             before = self._serialize_tree()
             remove_set = set(layer_ids or [])
 
-            # Disconnect rename listeners for the layers being removed.
+            # Disconnect rename + visibility listeners for the layers being removed.
             for lid in remove_set:
                 self._disconnect_layer_rename(lid)
+                self._disconnect_layer_visibility(lid)
 
             def prune(parent):
                 i = 0
