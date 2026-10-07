@@ -1,0 +1,21 @@
+"""Undo command for Layer Order Plus tree state changes.
+
+A single TreeStateCommand captures before/after JSON snapshots of the dock's
+tree. undo() and redo() both call back into the dock's apply-tree-state-from-undo
+path, which rebuilds the tree and forces a custom-layer-order apply.
+"""
+from qgis.PyQt.QtGui import QUndoCommand
+
+
+class TreeStateCommand(QUndoCommand):
+    def __init__(self, dock, before_json: str, after_json: str, text: str):
+        super().__init__(text)
+        self._dock = dock
+        self._before = before_json
+        self._after = after_json
+
+    def undo(self):
+        self._dock._apply_tree_state_from_undo(self._before)
+
+    def redo(self):
+        self._dock._apply_tree_state_from_undo(self._after)
