@@ -22,11 +22,33 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox,
 )
 
-from qgis.core import QgsProject, QgsApplication, QgsIconUtils, QgsMapLayer, QgsVectorLayer
+from qgis.core import (
+    QgsProject,
+    QgsApplication,
+    QgsIconUtils,
+    QgsMapLayer,
+    QgsVectorLayer,
+    QgsMessageLog,
+    Qgis,
+)
 
 
 ROLE_TYPE = Qt.ItemDataRole.UserRole + 1   # "group" | "layer"
 ROLE_ID   = Qt.ItemDataRole.UserRole + 2   # group_id | layer_id
+
+LOG_TAG = "LayerOrderPlus"
+
+
+def _log(msg, level=Qgis.Info):
+    """Centralised log helper. Visible in View → Panels → Log Messages."""
+    try:
+        QgsMessageLog.logMessage(str(msg), LOG_TAG, level)
+    except Exception:
+        # If QgsMessageLog itself fails (very early load), fall back to print.
+        try:
+            print(f"[{LOG_TAG}] {msg}")
+        except Exception:
+            pass
 
 TYPE_GROUP = "group"
 TYPE_LAYER = "layer"
@@ -567,6 +589,9 @@ class BetterLayerOrderDock(QDockWidget):
         self._update_group_actions_enabled()
         self._sync_control_from_project()
 
+        _log(f"dock initialised; chk_control exists={hasattr(self, 'chk_control')}; "
+             f"is_control_enabled={self.is_control_enabled()}")
+
     # ==================================================================
     # control rendering order (stock Layer Order parity)
     # ==================================================================
@@ -997,6 +1022,7 @@ class BetterLayerOrderDock(QDockWidget):
     # loading
     # ==================================================================
     def load_from_project(self, raw_json: str):
+        _log(f"load_from_project: json_len={len(raw_json) if raw_json else 0}")
         self._loading = True
         self.tree.blockSignals(True)
         try:
@@ -1044,74 +1070,95 @@ class BetterLayerOrderDock(QDockWidget):
     # layer add/remove (ANCHOR-BASED)
     # ==================================================================
     def on_layers_added(self, layers):
+        _log(f"on_layers_added: received {len(layers) if layers else 0} layer(s); "
+             f"_loading={self._loading}, _in_undo={self._in_undo}, "
+             f"is_control_enabled={self.is_control_enabled()}")
         if self._loading or self._in_undo:
+            _log("on_layers_added: skipped (loading or undo in progress)", Qgis.Warning)
             return
 
-        before = self._serialize_tree()
-        existing = set(self._iter_all_layer_ids())
-        new_layers = [l for l in layers if l.id() not in existing]
-        if not new_layers:
-            return
+        try:
+            before = self._serialize_tree()
+            existing = set(self._iter_all_layer_ids())
+            new_layers = [l for l in layers if l.id() not in existing]
+            if not new_layers:
+                _log("on_layers_added: no new layers (all already present)")
+                return
 
-        anchor = self._resolve_anchor_item()
-        dest_parent = None
-        dest_index = 0
+            anchor = self._resolve_anchor_item()
+            dest_parent = None
+            dest_index = 0
 
-        if anchor:
-            if anchor.data(0, ROLE_TYPE) == TYPE_LAYER:
-                dest_parent = anchor.parent()
-                dest_index = self._index_in_parent(anchor)
-            else:
-                dest_parent = anchor
-                dest_index = 0
+            if anchor:
+                if anchor.data(0, ROLE_TYPE) == TYPE_LAYER:
+                    dest_parent = anchor.parent()
+                    dest_index = self._index_in_parent(anchor)
+                else:
+                    dest_parent = anchor
+                    dest_index = 0
 
-        for lyr in new_layers:
-            self._insert_layer_item(dest_parent, dest_index, lyr)
-            dest_index += 1
+            for lyr in new_layers:
+                self._insert_layer_item(dest_parent, dest_index, lyr)
+                dest_index += 1
 
-        self.request_apply()
-        after = self._serialize_tree()
-        self._push_undo(before, after, "Add layers")
-        self._autosave()
+            self.request_apply()
+            after = self._serialize_tree()
+            self._push_undo(before, after, "Add layers")
+            self._autosave()
+            _log(f"on_layers_added: inserted {len(new_layers)} layer(s); "
+                 f"tree now has {sum(1 for _ in self._iter_all_layer_ids())} layer items")
+        except Exception as e:
+            _log(f"on_layers_added FAILED: {e!r}", Qgis.Critical)
+            import traceback
+            _log(traceback.format_exc(), Qgis.Critical)
 
     def on_layers_removed(self, layer_ids):
+        _log(f"on_layers_removed: received {len(layer_ids) if layer_ids else 0} id(s); "
+             f"_loading={self._loading}, _in_undo={self._in_undo}")
         if self._loading or self._in_undo:
             return
 
-        before = self._serialize_tree()
-        remove_set = set(layer_ids or [])
-
-        def prune(parent):
-            i = 0
-            while i < parent.childCount():
-                ch = parent.child(i)
-                t = ch.data(0, ROLE_TYPE)
-                if t == TYPE_LAYER and ch.data(0, ROLE_ID) in remove_set:
-                    parent.takeChild(i)
-                    continue
-                if t == TYPE_GROUP:
-                    prune(ch)
-                    # remove empty groups? keep them; do nothing
-                i += 1
-
-        self._loading = True
-        self.tree.blockSignals(True)
         try:
-            for i in reversed(range(self.tree.topLevelItemCount())):
-                top = self.tree.topLevelItem(i)
-                t = top.data(0, ROLE_TYPE)
-                if t == TYPE_LAYER and top.data(0, ROLE_ID) in remove_set:
-                    self.tree.takeTopLevelItem(i)
-                elif t == TYPE_GROUP:
-                    prune(top)
-        finally:
-            self.tree.blockSignals(False)
-            self._loading = False
+            before = self._serialize_tree()
+            remove_set = set(layer_ids or [])
 
-        self.request_apply()
-        after = self._serialize_tree()
-        self._push_undo(before, after, "Remove layers")
-        self._autosave()
+            def prune(parent):
+                i = 0
+                while i < parent.childCount():
+                    ch = parent.child(i)
+                    t = ch.data(0, ROLE_TYPE)
+                    if t == TYPE_LAYER and ch.data(0, ROLE_ID) in remove_set:
+                        parent.takeChild(i)
+                        continue
+                    if t == TYPE_GROUP:
+                        prune(ch)
+                        # remove empty groups? keep them; do nothing
+                    i += 1
+
+            self._loading = True
+            self.tree.blockSignals(True)
+            try:
+                for i in reversed(range(self.tree.topLevelItemCount())):
+                    top = self.tree.topLevelItem(i)
+                    t = top.data(0, ROLE_TYPE)
+                    if t == TYPE_LAYER and top.data(0, ROLE_ID) in remove_set:
+                        self.tree.takeTopLevelItem(i)
+                    elif t == TYPE_GROUP:
+                        prune(top)
+            finally:
+                self.tree.blockSignals(False)
+                self._loading = False
+
+            self.request_apply()
+            after = self._serialize_tree()
+            self._push_undo(before, after, "Remove layers")
+            self._autosave()
+            _log(f"on_layers_removed: pruned {len(remove_set)} id(s); "
+                 f"tree now has {sum(1 for _ in self._iter_all_layer_ids())} layer items")
+        except Exception as e:
+            _log(f"on_layers_removed FAILED: {e!r}", Qgis.Critical)
+            import traceback
+            _log(traceback.format_exc(), Qgis.Critical)
 
     # ==================================================================
     # apply to QGIS
@@ -1133,19 +1180,26 @@ class BetterLayerOrderDock(QDockWidget):
         self._apply_custom_order()
 
     def _apply_custom_order(self):
-        root = QgsProject.instance().layerTreeRoot()
-        if not self.is_control_enabled():
-            # Panel must not force custom order while the checkbox is off
-            root.setHasCustomLayerOrder(False)
-            return
-        layers = self._flatten_to_qgs_layers()
-        root.setHasCustomLayerOrder(True)
-        root.setCustomLayerOrder(layers)
-
         try:
-            self.iface.mapCanvas().refresh()
-        except Exception:
-            pass
+            root = QgsProject.instance().layerTreeRoot()
+            if not self.is_control_enabled():
+                # Panel must not force custom order while the checkbox is off
+                root.setHasCustomLayerOrder(False)
+                _log("_apply_custom_order: skipped (control unchecked)")
+                return
+            layers = self._flatten_to_qgs_layers()
+            root.setHasCustomLayerOrder(True)
+            root.setCustomLayerOrder(layers)
+            _log(f"_apply_custom_order: applied {len(layers)} layer(s) to custom order")
+
+            try:
+                self.iface.mapCanvas().refresh()
+            except Exception as e:
+                _log(f"_apply_custom_order: mapCanvas.refresh failed: {e!r}", Qgis.Warning)
+        except Exception as e:
+            _log(f"_apply_custom_order FAILED: {e!r}", Qgis.Critical)
+            import traceback
+            _log(traceback.format_exc(), Qgis.Critical)
 
     # ==================================================================
     # events (undo hooks)
