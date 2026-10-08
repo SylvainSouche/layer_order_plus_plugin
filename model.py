@@ -25,10 +25,11 @@ import uuid
 from contextlib import contextmanager
 
 try:
-    from .logger import _vlog, _vlog_method
+    from .logger import _vlog, _vlog_method, _vlog_error
 except ImportError:
     def _vlog(msg): pass
     def _vlog_method(name, tag=""): pass
+    def _vlog_error(name, exc): pass
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional, Union
 
@@ -177,11 +178,11 @@ class LayerOrderModel:
         for cb in list(self._listeners):  # copy in case a listener removes itself
             try:
                 cb(event_type, payload)
-            except Exception:
-                # Listener errors must not break the Model. Production code
-                # logs via QgsMessageLog; here we swallow to keep the Model
-                # Qt-free and side-effect-free.
-                pass
+            except Exception as exc:
+                # Listener errors must not break the Model, but they must not
+                # vanish either — a failing View update is exactly the kind
+                # of silent desync that is impossible to debug otherwise.
+                _vlog_error(f"[M] listener for {event_type}", exc)
 
     # ------------------------------------------------------------------
     # Query methods
@@ -567,6 +568,92 @@ class LayerOrderModel:
         # Pruning only happens on layer deletion (remove_layer), not on
         # moves. The "remove empty groups" setting controls layer-delete
         # pruning, not move pruning.
+
+    def move_items(self, item_ids: list[str], new_parent_id: Optional[str],
+                   before_id: Optional[str] = None) -> bool:
+        """Atomically move several nodes into `new_parent_id` (None = top-level).
+
+        The moved nodes are inserted as one contiguous block, in the order
+        given by `item_ids`, immediately before the sibling `before_id`
+        (None → appended at the end of the parent).
+
+        Unlike repeated move_item() calls, the anchor is a sibling id, not
+        an index, so it stays valid while the movers are being taken out.
+
+        Ids that are descendants of another mover are ignored (they travel
+        with their ancestor). Returns False (no-op, no emit) if the move is
+        invalid: unknown parent, anchor not a child of the parent, anchor
+        is itself a mover, or the parent is a mover / descendant of one.
+
+        Emits a single ITEM_MOVED (payload: item_ids, new_parent_id) +
+        ORDER_CHANGED if anything changed.
+        """
+        _vlog(f"[M] move_items ids={item_ids} parent={new_parent_id} before={before_id}")
+        nodes = [self.find_item(i) for i in item_ids]
+        nodes = [n for n in nodes if n is not None]
+        # Drop duplicates and nodes nested inside another mover
+        movers: list[Node] = []
+        for n in nodes:
+            if any(n is m for m in movers):
+                continue
+            if any(m is not n and self._is_descendant(n, m) for m in nodes):
+                continue
+            movers.append(n)
+        if not movers:
+            return False
+
+        new_parent = self.find_item(new_parent_id) if new_parent_id else None
+        if new_parent_id is not None and not isinstance(new_parent, GroupNode):
+            return False
+        if new_parent is not None and any(self._is_descendant(new_parent, m) for m in movers):
+            return False  # cycle
+        new_siblings = new_parent.children if new_parent is not None else self._root
+        if before_id is not None:
+            if any(m.id == before_id for m in movers):
+                return False
+            if not any(s.id == before_id for s in new_siblings):
+                return False
+
+        before = [(self.find_parent(m.id), self.get_index_in_parent(m.id)) for m in movers]
+
+        # Take every mover out of its current parent
+        for m in movers:
+            parent = self.find_parent(m.id)
+            siblings = parent.children if parent is not None else self._root
+            for i, s in enumerate(siblings):
+                if s is m:
+                    siblings.pop(i)
+                    break
+
+        # Resolve the anchor AFTER removal — this is what keeps it correct
+        if before_id is None:
+            idx = len(new_siblings)
+        else:
+            idx = next(i for i, s in enumerate(new_siblings) if s.id == before_id)
+        new_siblings[idx:idx] = movers
+
+        after = [(new_parent, idx + k) for k in range(len(movers))]
+        if all(b[0] is a[0] and b[1] == a[1] for b, a in zip(before, after)):
+            return False  # nothing actually moved
+        self._emit(EVENT_ITEM_MOVED, {
+            "item_ids": [m.id for m in movers],
+            "new_parent_id": new_parent.id if new_parent is not None else None,
+            "new_index": idx,
+        })
+        self._emit(EVENT_ORDER_CHANGED, {})
+        return True
+
+    def tree_order_key(self) -> dict:
+        """Return {node_id: pre-order position} for sorting ids in display order."""
+        order: dict = {}
+        def walk(node: Node) -> None:
+            order[node.id] = len(order)
+            if isinstance(node, GroupNode):
+                for ch in node.children:
+                    walk(ch)
+        for top in self._root:
+            walk(top)
+        return order
 
     def move_items_to_boundary(self, item_ids: list[str], to_top: bool) -> None:
         """Move each item to the top (or bottom) of its respective parent.

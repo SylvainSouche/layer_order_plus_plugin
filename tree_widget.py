@@ -33,6 +33,7 @@ from .tree_utils import (
 DROP_ON = "on"
 DROP_ABOVE = "above"
 DROP_BELOW = "below"
+DROP_END = "end"      # empty area below the last row → bottom of top level
 
 
 class BetterLayerTree(QTreeWidget):
@@ -41,8 +42,9 @@ class BetterLayerTree(QTreeWidget):
     Signals:
         drop_intent(moving_ids: list[str], target_id: str, position: str)
             Emitted when the user drops items. `position` is one of
-            DROP_ON / DROP_ABOVE / DROP_BELOW. The ViewController translates
-            this to Model mutations.
+            DROP_ON / DROP_ABOVE / DROP_BELOW, or DROP_END (empty area,
+            target_id ""). `moving_ids` is in display order. The
+            ViewController translates this to Model mutations.
     """
 
     drop_intent = pyqtSignal(list, str, str)
@@ -70,62 +72,72 @@ class BetterLayerTree(QTreeWidget):
     # ------------------------------------------------------------------
     # drop handling — emit semantic intent, do NOT mutate
     # ------------------------------------------------------------------
-    def dropEvent(self, e: QDropEvent):
-        p = self._event_pos_point(e)
-        pos = self.dropIndicatorPosition()
-
-        if pos not in (QAbstractItemView.DropIndicatorPosition.OnItem,
-                       QAbstractItemView.DropIndicatorPosition.AboveItem,
-                       QAbstractItemView.DropIndicatorPosition.BelowItem):
-            super().dropEvent(e)
-            return
-
-        target = self.itemAt(p)
-        if target is None:
-            super().dropEvent(e)
-            return
-
-        selected = self.selectedItems()
+    def _moving_items(self):
+        """Selected, visible items whose ancestors are not also selected, in display order."""
+        selected = [it for it in self.selectedItems() if not it.isHidden()]
         selected_ids = {id(x) for x in selected}
 
-        # Filter: don't move a child if its parent is also moving
-        moving = [it for it in selected
-                  if (it.parent() is None or id(it.parent()) not in selected_ids)]
-        if not moving:
-            e.ignore()
-            return
+        def has_selected_ancestor(it):
+            p = it.parent()
+            while p is not None:
+                if id(p) in selected_ids:
+                    return True
+                p = p.parent()
+            return False
 
-        moving_ids = {id(x) for x in moving}
+        moving = [it for it in selected if not has_selected_ancestor(it)]
+        # selectedItems() is in click order; the Model needs display order
+        moving.sort(key=self._visual_key)
+        return moving
 
-        # Can't drop ON a moving item
-        if pos == QAbstractItemView.DropIndicatorPosition.OnItem and id(target) in moving_ids:
-            e.ignore()
-            return
+    def _visual_key(self, item):
+        """Tuple of row indices from the root — sorts items in display order."""
+        key = []
+        cur = item
+        while cur is not None:
+            p = cur.parent()
+            key.append(p.indexOfChild(cur) if p is not None else self.indexOfTopLevelItem(cur))
+            cur = p
+        return tuple(reversed(key))
 
-        # Cycle prevention: can't move an item onto its own descendant
-        for it in moving:
-            if self._is_ancestor(it, target):
-                e.ignore()
-                return
-
-        # Map Qt drop position to semantic string
-        if pos == QAbstractItemView.DropIndicatorPosition.OnItem:
-            position = DROP_ON
-        elif pos == QAbstractItemView.DropIndicatorPosition.AboveItem:
-            position = DROP_ABOVE
-        else:
-            position = DROP_BELOW
-
-        # Emit the semantic intent — ViewController will translate to Model mutations
-        moving_item_ids = [it.data(0, ROLE_ID) for it in moving]
-        target_id = target.data(0, ROLE_ID)
-        _vlog(f"[TW] drop_intent: moving={moving_item_ids} target={target_id} pos={position}")
-        self.drop_intent.emit(moving_item_ids, target_id, position)
-
-        # CRITICAL: set the drop action to IgnoreAction so Qt's QTreeWidget
-        # does NOT remove the source items from the model. We handle the
-        # actual move via the Model (deferred to next event loop iteration
-        # by the ViewController). Without this, Qt's InternalMove would
-        # delete the dragged items from the tree, desyncing View from Model.
+    def dropEvent(self, e: QDropEvent):
+        # Whatever happens, never let QTreeWidget move items itself: the View
+        # must only change in response to Model events. Calling
+        # super().dropEvent() here would rearrange QTreeWidgetItems behind
+        # the Model's back (this is what happened on drops in empty space).
         e.setDropAction(Qt.DropAction.IgnoreAction)
         e.accept()
+
+        if e.source() is not self:
+            return
+
+        moving = self._moving_items()
+        if not moving:
+            return
+
+        pos = self.dropIndicatorPosition()
+        target = self.itemAt(self._event_pos_point(e))
+
+        if pos == QAbstractItemView.DropIndicatorPosition.OnViewport or target is None:
+            # Empty area below the last row → move to the bottom of the top level
+            position = DROP_END
+            target_id = ""
+        else:
+            if pos == QAbstractItemView.DropIndicatorPosition.OnItem:
+                position = DROP_ON
+            elif pos == QAbstractItemView.DropIndicatorPosition.AboveItem:
+                position = DROP_ABOVE
+            else:
+                position = DROP_BELOW
+            # Dropping onto (or next to) one of the dragged items is a no-op
+            if any(it is target for it in moving):
+                return
+            # Cycle prevention: can't move an item into its own subtree
+            for it in moving:
+                if self._is_ancestor(it, target):
+                    return
+            target_id = target.data(0, ROLE_ID)
+
+        moving_item_ids = [it.data(0, ROLE_ID) for it in moving]
+        _vlog(f"[TW] drop_intent: moving={moving_item_ids} target={target_id} pos={position}")
+        self.drop_intent.emit(moving_item_ids, target_id, position)
