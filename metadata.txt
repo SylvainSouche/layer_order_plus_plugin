@@ -4,7 +4,7 @@ qgisMinimumVersion=4.0.0
 qgisMaximumVersion=4.99.0
 description=Layer Order panel with grouping (QGIS 4 / PyQt6 fork)
 about=Alternative to the Layer Order panel with order groups. Fork of the original Layer Order Plus 1.0.0 for QGIS 4: PyQt6 imports/enums, undo restores map draw order, folder and layer-type icons. Groups are for ordering only (not Layers-panel groups).
-version=1.2.24
+version=1.2.25
 author=Samuel Kultz (original); Sylvain Souche (QGIS 4 fork)
 email=samkultz@me.com
 category=Productivity
@@ -18,6 +18,7 @@ experimental=False
 deprecated=False
 server=False
 changelog=
+    1.2.25: Fix sync with the stock Layer Order panel — its two-step drag (layer briefly listed twice) was reconciled mid-way, duplicating layers and destroying groups; reconcile is now coalesced to the final state and rewritten (reconcile.py) to only re-place the dragged layer, keeping every group; Plus edits no longer reloaded twice by QUndoStack.push
     1.2.24: Fix drag-drop View/Model desync — atomic sibling-anchored Model.move_items (multi-item drops no longer scramble), drops in empty space no longer let Qt move items behind the Model, one View rebuild + one undo step per user action, expand/collapse synced to Model, tri-state group echo no longer re-checks layers, apply guard no longer leaks (QGIS skips the signal for an unchanged order)
     1.2.21: Fix reconciliation firing after Plus drag-drop — counter-based guard replaces 200ms timer; deduplicate layers in customLayerOrder
     1.2.20: Fix move_item pruning — empty groups survive moves (not pruned); only layer deletion prunes
