@@ -395,7 +395,9 @@ class BetterLayerOrderPlugin(QObject):
         # Don't log every eventFilter call — it fires on EVERY key/mouse event
         # and floods the log. Only log when we actually intercept a shortcut.
         from qgis.PyQt.QtCore import QEvent
-        if event.type() == QEvent.Type.ShortcutOverride:
+        # Handle BOTH ShortcutOverride AND KeyPress — QGIS's native undo action
+        # may swallow ShortcutOverride, so we need to catch KeyPress too.
+        if event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
             key = event.key()
             mods = event.modifiers()
             from qgis.PyQt.QtCore import Qt
@@ -404,6 +406,8 @@ class BetterLayerOrderPlugin(QObject):
             # Ctrl+Y OR Ctrl+Shift+Z = redo
             is_redo_y = (key == Qt.Key.Key_Y and mods == Qt.KeyboardModifier.ControlModifier)
             is_redo_shift = (key == Qt.Key.Key_Z and mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
+            # Only intercept when NO vector layer is being edited (digitizing
+            # undo takes priority when editing features).
             if (is_undo or is_redo_y or is_redo_shift) and not self._is_editing_layer():
                 _vlog_method("eventFilter")
                 if is_undo and self._undo_group and self._undo_group.canUndo():

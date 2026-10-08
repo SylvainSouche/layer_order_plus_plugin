@@ -58,6 +58,8 @@ class LayerOrderController(QObject):
         # Apply state machine
         self._apply_suspended = True
         self._in_reconcile = False  # guard against reconcile feedback loop
+        self._in_apply = False      # guard: our own setCustomLayerOrder triggers customLayerOrderChanged
+        self._in_layer_add_remove = False  # guard: layer add/remove triggers order changes
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
         self._apply_timer.timeout.connect(self._apply_now)
@@ -162,12 +164,20 @@ class LayerOrderController(QObject):
         _vlog_method("_on_custom_order_changed")
         """Stock Layer Order panel moved a layer → update Model.
 
-        Guard: skip if we're already reconciling (prevents feedback loop:
-        reconcile → apply to QGIS → customLayerOrderChanged → reconcile ...).
+        Guards:
+        - Skip if we're already reconciling (prevents feedback loop).
+        - Skip if we're applying (our own _apply_custom_order triggers this
+          signal — we must not reconcile our own changes).
+        - Skip if layers are being added/removed (those trigger order changes
+          that are NOT user reorders in the native panel).
         """
         if not self._view.is_control_enabled():
             return
         if self._in_reconcile:
+            return
+        if self._in_apply:
+            return
+        if self._in_layer_add_remove:
             return
         self._in_reconcile = True
         try:
@@ -175,6 +185,12 @@ class LayerOrderController(QObject):
             qgis_order = [lyr.id() for lyr in root.customLayerOrder()]
             our_order = self._vc.get_flattened_layer_ids()
             if qgis_order == our_order:
+                return
+            # Only reconcile if the layer SETS are the same (same layers,
+            # different order). If layer sets differ, it's an add/remove,
+            # not a reorder — let on_layers_added/removed handle it.
+            if set(qgis_order) != set(our_order):
+                _log("_on_custom_order_changed: layer sets differ (add/remove) — skipping reconcile")
                 return
             _log(f"_on_custom_order_changed: QGIS order differs from Plus — reconciling")
             self._reconcile_order_with_qgis(qgis_order)
@@ -350,6 +366,7 @@ class LayerOrderController(QObject):
     def _on_layers_added(self, layers):
         _vlog_method("_on_layers_added")
         _log(f"_on_layers_added: received {len(layers) if layers else 0} layer(s)")
+        self._in_layer_add_remove = True
         try:
             layer_data = [(lyr.id(), lyr.name()) for lyr in layers]
             self._vc.add_layers(layer_data)
@@ -360,10 +377,13 @@ class LayerOrderController(QObject):
         except Exception as e:
             _log(f"_on_layers_added FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
+        finally:
+            self._in_layer_add_remove = False
 
     def _on_layers_removed(self, layer_ids):
         _vlog_method("_on_layers_removed")
         _log(f"_on_layers_removed: received {len(layer_ids) if layer_ids else 0} id(s)")
+        self._in_layer_add_remove = True
         try:
             for lid in (layer_ids or []):
                 self._disconnect_layer_rename(lid)
@@ -372,6 +392,8 @@ class LayerOrderController(QObject):
         except Exception as e:
             _log(f"_on_layers_removed FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
+        finally:
+            self._in_layer_add_remove = False
 
     # ==================================================================
     # Layer rename sync (QGIS layer.nameChanged → ViewController)
@@ -595,6 +617,9 @@ class LayerOrderController(QObject):
 
     def _apply_custom_order(self):
         _vlog_method("_apply_custom_order")
+        # Set _in_apply so _on_custom_order_changed knows this order change
+        # came from us (not from the user reordering in the native panel).
+        self._in_apply = True
         try:
             root = QgsProject.instance().layerTreeRoot()
             if not self._view.is_control_enabled():
@@ -618,6 +643,8 @@ class LayerOrderController(QObject):
         except Exception as e:
             _log(f"_apply_custom_order FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
+        finally:
+            self._in_apply = False
 
     # ==================================================================
     # External control (plugin.py calls these during project load)
