@@ -57,6 +57,7 @@ class LayerOrderController(QObject):
 
         # Apply state machine
         self._apply_suspended = True
+        self._in_reconcile = False  # guard against reconcile feedback loop
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
         self._apply_timer.timeout.connect(self._apply_now)
@@ -138,9 +139,16 @@ class LayerOrderController(QObject):
 
     def _on_custom_order_changed(self):
         _vlog_method("_on_custom_order_changed")
-        """Stock Layer Order panel moved a layer → update Model."""
+        """Stock Layer Order panel moved a layer → update Model.
+
+        Guard: skip if we're already reconciling (prevents feedback loop:
+        reconcile → apply to QGIS → customLayerOrderChanged → reconcile ...).
+        """
         if not self._view.is_control_enabled():
             return
+        if self._in_reconcile:
+            return
+        self._in_reconcile = True
         try:
             root = QgsProject.instance().layerTreeRoot()
             qgis_order = [lyr.id() for lyr in root.customLayerOrder()]
@@ -151,6 +159,8 @@ class LayerOrderController(QObject):
             self._reconcile_order_with_qgis(qgis_order)
         except Exception as e:
             _log(f"_on_custom_order_changed FAILED: {e!r}", Qgis.Critical)
+        finally:
+            self._in_reconcile = False
 
     def _reconcile_order_with_qgis(self, qgis_order):
         _vlog_method("_reconcile_order_with_qgis")
