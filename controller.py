@@ -134,8 +134,20 @@ class LayerOrderController(QObject):
 
     def _on_has_custom_order_changed(self):
         _vlog_method("_on_has_custom_order_changed")
-        """Stock Layer Order checkbox toggled → sync Plus checkbox."""
+        """Stock Layer Order checkbox toggled → sync Plus checkbox + re-populate.
+
+        When the user activates 'Control rendering order' in the stock panel,
+        we re-populate the Plus tree from QGIS's customLayerOrder so the
+        panel matches the stock panel's order from the start.
+        """
         self._sync_control_from_project()
+        root = QgsProject.instance().layerTreeRoot()
+        if root.hasCustomLayerOrder():
+            qgis_order_ids = [lyr.id() for lyr in root.customLayerOrder()]
+            our_order_ids = self._vc.get_flattened_layer_ids()
+            if qgis_order_ids != our_order_ids:
+                _log("_on_has_custom_order_changed: re-populating from customLayerOrder")
+                self._reconcile_order_with_qgis(qgis_order_ids)
 
     def _on_custom_order_changed(self):
         _vlog_method("_on_custom_order_changed")
@@ -164,7 +176,10 @@ class LayerOrderController(QObject):
 
     def _reconcile_order_with_qgis(self, qgis_order):
         _vlog_method("_reconcile_order_with_qgis")
-        """Rebuild the Model's layer order to match QGIS's flat order."""
+        """Rebuild the Model's layer order to match QGIS's flat order.
+
+        If the Plus tree has groups, show a warning dialog before removing them.
+        """
         from .model import GroupNode
         model = self._vc._model
         # Check if our Model has any groups
@@ -178,6 +193,25 @@ class LayerOrderController(QObject):
         if has_groups_recursive(model.get_root()):
             _log("QGIS order change conflicts with Plus grouping — "
                  "rebuilding flat (groups removed to honour QGIS order)", Qgis.Warning)
+            # Show warning dialog
+            from qgis.PyQt.QtWidgets import QMessageBox
+            ret = QMessageBox.warning(
+                self._view,
+                "Layer Order Plus",
+                "A layer was moved in the standard Layer Order panel in a way that "
+                "conflicts with the grouping in Layer Order Plus.\n\n"
+                "To honour the new order, all groups will be removed and layers "
+                "will be re-ordered flat.\n\n"
+                "Click OK to proceed, or Cancel to keep the current grouping "
+                "(the standard panel's order will be overridden).",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Ok
+            )
+            if ret != QMessageBox.StandardButton.Ok:
+                _log("User cancelled reconciliation — re-applying Plus order to QGIS")
+                # Re-apply our order to QGIS (override the stock panel's change)
+                self._apply_now_force()
+                return
         # Rebuild flat to match QGIS's order
         with model.block_notifications():
             model.clear()

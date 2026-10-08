@@ -209,6 +209,7 @@ class LayerOrderView(QDockWidget):
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.itemSelectionChanged.connect(self._on_selection_changed)
         self.tree.drop_intent.connect(self.drop_intent.emit)  # re-emit
 
     # ==================================================================
@@ -385,6 +386,10 @@ class LayerOrderView(QDockWidget):
         n = len(groups)
         self.btn_rename_group.setEnabled(n == 1 and self.is_control_enabled())
         self.btn_del_group.setEnabled(n >= 1 and self.is_control_enabled())
+
+    def _on_selection_changed(self):
+        """Tree selection changed → update button enabled states."""
+        self._update_group_actions_enabled()
 
     def on_selection_changed(self):
         """Called by ViewController when tree selection changes (to update button states)."""

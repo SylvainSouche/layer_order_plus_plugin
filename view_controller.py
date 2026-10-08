@@ -464,13 +464,25 @@ class ViewController(QObject):
 
     def _apply_tree_state_from_undo(self, raw_json: str):
         _vlog_method("_apply_tree_state_from_undo")
-        """Called by TreeStateCommand.undo/redo."""
+        """Called by TreeStateCommand.undo/redo.
+
+        Loads the saved JSON into the Model, rebuilds the View, and
+        emits order_changed so the Controller re-applies to QGIS.
+        The _in_undo guard prevents _push_undo from recording the
+        undo's own changes as a new undo entry.
+        """
         self._in_undo = True
         try:
             with self._model.block_notifications():
                 self._model.load_from_json(raw_json)
             self._rebuild_view_from_model()
             self._snapshot = self._model.serialize()
+            # Emit order_changed so the Controller applies to QGIS.
+            # (block_notifications coalesced the ORDER_CHANGED; we emit
+            # it manually here since we're past the block.)
+            self.order_changed.emit()
+            # Also trigger autosave so the restored state is persisted
+            self._autosave()
         finally:
             self._in_undo = False
 

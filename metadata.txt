@@ -4,7 +4,7 @@ qgisMinimumVersion=4.0.0
 qgisMaximumVersion=4.99.0
 description=Layer Order panel with grouping (QGIS 4 / PyQt6 fork)
 about=Alternative to the Layer Order panel with order groups. Fork of the original Layer Order Plus 1.0.0 for QGIS 4: PyQt6 imports/enums, undo restores map draw order, folder and layer-type icons. Groups are for ordering only (not Layers-panel groups).
-version=1.2.7
+version=1.2.8
 author=Samuel Kultz (original); Sylvain Souche (QGIS 4 fork)
 email=samkultz@me.com
 category=Productivity
@@ -18,6 +18,7 @@ experimental=False
 deprecated=False
 server=False
 changelog=
+    1.2.8: Fix delete-button grayed + initial order mismatch + reconciliation warning popup + undo/redo panel update
     1.2.7: CRITICAL fix — undo.py NameError broke every drag-drop/layer-add; fix reconcile feedback loop; reduce eventFilter log noise
     1.2.6: Verbose logging checkbox + fix View self-mutation during DnD + sync with stock Layer Order panel
     1.2.5: Fix drag-drop corruption (defer to next event loop) + effective visibility (consider parent group)
