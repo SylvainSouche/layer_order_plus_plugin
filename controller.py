@@ -179,6 +179,7 @@ class LayerOrderController(QObject):
         self.project_loaded.emit()
         if model.get_control_enabled():
             self._apply_custom_order()   # QGIS may hold a stale order (1.2.22)
+        self._refresh_native_panel()
 
     def _sync_layer_set(self) -> None:
         """Make the Model's layers exactly QGIS's layers, with QGIS's names/visibility."""
@@ -273,9 +274,31 @@ class LayerOrderController(QObject):
     def _on_has_custom_order_changed(self, *_args) -> None:
         enabled = QgsProject.instance().layerTreeRoot().hasCustomLayerOrder()
         self._model.set_control_enabled(enabled)
-        if enabled and not self._applying and not self._loading:
+        if self._applying or self._loading:
+            return  # our own apply / the load refreshes when it is done
+        if enabled:
             # Plus takes over: push its order (QGIS's may be stale)
             self._apply_custom_order()
+        self._refresh_native_panel()
+
+    def _refresh_native_panel(self) -> None:
+        """Make QGIS's own Layer Order panel show the real order.
+
+        That panel re-reads layerOrder() only on customLayerOrderChanged,
+        never when hasCustomLayerOrder flips, and QGIS skips the signal when
+        the order is unchanged. Turning control on (or off, or loading a
+        project) can therefore leave it showing the previous order while the
+        map uses another. Setting the same order through an empty one forces
+        the signal; _applying keeps us from reacting to our own echo.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        order = root.customLayerOrder()
+        self._applying = True
+        try:
+            root.setCustomLayerOrder([])
+            root.setCustomLayerOrder(order)
+        finally:
+            self._applying = False
 
     def _on_custom_order_changed(self) -> None:
         """Custom order changed outside Plus → schedule a reconcile.

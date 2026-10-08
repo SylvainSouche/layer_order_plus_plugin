@@ -78,6 +78,11 @@ step is recorded.
 * **QGIS → Plus**: layer added (placed next to its Layers-panel neighbour,
   one loop turn later because QGIS creates the tree node after
   `layersAdded`), removed, renamed, visibility, `hasCustomLayerOrder`.
+* **Stock Layer Order panel display**: that panel re-reads the order only on
+  `customLayerOrderChanged`, which QGIS skips for an unchanged order and
+  never sends when `hasCustomLayerOrder` flips. After a control toggle (either
+  checkbox) or a project load, the Controller re-sets the same order through
+  an empty one so the panel shows what the map really uses.
 * **Stock Layer Order panel**: a drag there changes the order twice (layer
   briefly listed twice, then removed from its old row). The Controller
   reconciles once on the final order, using the duplicate as the hint of
