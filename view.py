@@ -10,21 +10,18 @@ Contract
 * **In**: the ViewController tells the View what to display through the
   ``render*`` methods. That is the only way displayed state changes.
 
-Pure presentation state stays here: selection, scroll position, the name
-filter, enabled/disabled look. The View knows nothing of the Model, QGIS,
+Pure presentation state stays here: selection, scroll position,
+enabled/disabled look. The View knows nothing of the Model, QGIS,
 or undo.
 """
-from typing import Optional
 
 from qgis.PyQt.QtCore import QItemSelectionModel, QSize, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QKeySequence, QShortcut
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QDockWidget,
     QHBoxLayout,
     QInputDialog,
-    QLineEdit,
     QMenu,
     QPushButton,
     QTreeWidgetItem,
@@ -34,15 +31,13 @@ from qgis.PyQt.QtWidgets import (
 
 from .icons import icon_add_group, icon_group, icon_remove_group, icon_rename_group
 from .tree_utils import (
-    ROLE_EXPANDED,
     ROLE_ID,
     ROLE_TYPE,
     TYPE_GROUP,
-    apply_name_filter,
     find_group_item,
     find_layer_item,
 )
-from .tree_widget import BetterLayerTree
+from .tree_widget import LayerOrderTree
 
 _TREE_TOOLTIP = (
     "Drag layers and groups to set draw order (top of tree = drawn on top).\n\n"
@@ -73,12 +68,9 @@ class LayerOrderView(QDockWidget):
     control_toggled = pyqtSignal(bool)
     remove_empty_toggled = pyqtSignal(bool)
     verbose_toggled = pyqtSignal(bool)
-    undo_shortcut_activated = pyqtSignal()
-    redo_shortcut_activated = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__("Layer Order Plus", parent)
-        self._filter_text = ""
         self._build_ui()
         self._connect_signals()
 
@@ -108,16 +100,7 @@ class LayerOrderView(QDockWidget):
             head.addWidget(b)
         head.addStretch(1)
 
-        self.ed_filter = QLineEdit()
-        self.ed_filter.setPlaceholderText("Filter by name…")
-        self.ed_filter.setClearButtonEnabled(True)
-        self.ed_filter.setToolTip(
-            "Case-insensitive substring filter on layer and group names.\n"
-            "Items are hidden, not removed — clear to restore."
-        )
-        lay.addWidget(self.ed_filter)
-
-        self.tree = BetterLayerTree()
+        self.tree = LayerOrderTree()
         self.tree.setHeaderHidden(True)
         self.tree.setToolTip(_TREE_TOOLTIP)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -150,16 +133,6 @@ class LayerOrderView(QDockWidget):
         for c in (self.chk_control, self.chk_remove_empty, self.chk_verbose):
             lay.addWidget(c)
 
-        # Dock-local shortcuts; plugin.py also installs application-wide ones
-        self._shortcuts = []
-        for seq, sig in ((QKeySequence.StandardKey.Undo, self.undo_shortcut_activated),
-                         (QKeySequence.StandardKey.Redo, self.redo_shortcut_activated),
-                         (QKeySequence("Ctrl+Shift+Z"), self.redo_shortcut_activated)):
-            sc = QShortcut(seq, self)
-            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            sc.activated.connect(sig)
-            self._shortcuts.append(sc)
-
     def _connect_signals(self):
         self.btn_add_group.clicked.connect(
             lambda: self.create_group_requested.emit(self.selected_ids()))
@@ -169,7 +142,6 @@ class LayerOrderView(QDockWidget):
         self._report_only(self.chk_control, self.control_toggled)
         self._report_only(self.chk_remove_empty, self.remove_empty_toggled)
         self._report_only(self.chk_verbose, self.verbose_toggled)
-        self.ed_filter.textChanged.connect(self._on_filter_changed)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemSelectionChanged.connect(self._update_group_buttons)
         self.tree.drop_intent.connect(self.drop_requested)
@@ -191,7 +163,7 @@ class LayerOrderView(QDockWidget):
     # Selection (presentation state)
     # ==================================================================
     def selected_ids(self) -> list[str]:
-        """Selected, visible items without a selected ancestor, in display order."""
+        """Selected items without a selected ancestor, in display order."""
         return [it.data(0, ROLE_ID) for it in self.tree.moving_items()]
 
     def selected_group_ids(self) -> list[str]:
@@ -255,7 +227,7 @@ class LayerOrderView(QDockWidget):
     # ==================================================================
     # Dialogs
     # ==================================================================
-    def ask_text(self, title: str, label: str, default: str) -> Optional[str]:
+    def ask_text(self, title: str, label: str, default: str) -> str | None:
         """Modal text prompt. Returns the stripped text, or None if cancelled/empty."""
         text, ok = QInputDialog.getText(self, title, label, text=default)
         text = (text or "").strip()
@@ -281,11 +253,9 @@ class LayerOrderView(QDockWidget):
             tree.verticalScrollBar().setValue(scroll)
         finally:
             tree.blockSignals(False)
-        if self._filter_text:
-            apply_name_filter(tree, self._filter_text)
         self._update_group_buttons()
 
-    def _build_item(self, node: dict, parent: Optional[QTreeWidgetItem]) -> QTreeWidgetItem:
+    def _build_item(self, node: dict, parent: QTreeWidgetItem | None) -> QTreeWidgetItem:
         it = QTreeWidgetItem([node.get("name", "")])
         it.setData(0, ROLE_TYPE, node["type"])
         it.setData(0, ROLE_ID, node["id"])
@@ -298,9 +268,7 @@ class LayerOrderView(QDockWidget):
             it.setIcon(0, icon_group())
             for ch in node.get("children", []):
                 self._build_item(ch, it)
-            expanded = bool(node.get("expanded", True))
-            it.setData(0, ROLE_EXPANDED, expanded)
-            it.setExpanded(expanded)
+            it.setExpanded(bool(node.get("expanded", True)))
             it.setCheckState(0, self._group_state(it))
         else:
             icon = node.get("icon")
@@ -320,7 +288,7 @@ class LayerOrderView(QDockWidget):
             return Qt.CheckState.Unchecked
         return Qt.CheckState.PartiallyChecked
 
-    def _find(self, item_id: str) -> Optional[QTreeWidgetItem]:
+    def _find(self, item_id: str) -> QTreeWidgetItem | None:
         return find_group_item(self.tree, item_id) or find_layer_item(self.tree, item_id)
 
     def render_name(self, item_id: str, name: str):
@@ -341,7 +309,6 @@ class LayerOrderView(QDockWidget):
     def render_expanded(self, group_id: str, expanded: bool):
         it = find_group_item(self.tree, group_id)
         if it is not None:
-            it.setData(0, ROLE_EXPANDED, expanded)
             it.setExpanded(expanded)
 
     def render_selection(self, item_ids: list[str]):
@@ -359,11 +326,9 @@ class LayerOrderView(QDockWidget):
 
     def render_control_enabled(self, enabled: bool):
         self.chk_control.setChecked(bool(enabled))
-        for w in (self.tree, self.btn_add_group, self.ed_filter, self.chk_remove_empty):
+        for w in (self.tree, self.btn_add_group, self.chk_remove_empty):
             w.setEnabled(enabled)
         self.tree.setStyleSheet("" if enabled else "QTreeWidget { color: palette(disabled); }")
-        if not enabled:
-            self.ed_filter.clear()
         self._update_group_buttons()
 
     def render_remove_empty(self, checked: bool):
@@ -371,23 +336,3 @@ class LayerOrderView(QDockWidget):
 
     def render_verbose(self, checked: bool):
         self.chk_verbose.setChecked(bool(checked))
-
-    # ==================================================================
-    # Filter (presentation only)
-    # ==================================================================
-    def _on_filter_changed(self, text: str):
-        self._filter_text = (text or "").strip()
-        apply_name_filter(self.tree, self._filter_text)
-        if not self._filter_text:
-            self._restore_expansion()
-
-    def _restore_expansion(self):
-        """The filter opens groups to reveal matches; clearing it shows the
-        expansion the ViewController last rendered again."""
-        def rec(it):
-            if it.data(0, ROLE_TYPE) == TYPE_GROUP:
-                it.setExpanded(bool(it.data(0, ROLE_EXPANDED)))
-            for i in range(it.childCount()):
-                rec(it.child(i))
-        for i in range(self.tree.topLevelItemCount()):
-            rec(self.tree.topLevelItem(i))

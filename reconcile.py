@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import copy
 from bisect import bisect_left
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
-from .model import GroupNode, LayerNode
+from .model import GroupNode
 
 
 def _flatten(nodes) -> list:
@@ -119,7 +119,7 @@ class _Tree:
     def __init__(self, root: list):
         self.root = root
 
-    def parent(self, node_id) -> Optional[GroupNode]:
+    def parent(self, node_id) -> GroupNode | None:
         def walk(children, parent):
             for ch in children:
                 if ch.id == node_id:
@@ -140,10 +140,10 @@ class _Tree:
             p = self.parent(p.id)
         return list(reversed(out))
 
-    def children_of(self, group: Optional[GroupNode]) -> list:
+    def children_of(self, group: GroupNode | None) -> list:
         return group.children if group is not None else self.root
 
-    def child_containing(self, group: Optional[GroupNode], node_id) -> Optional[int]:
+    def child_containing(self, group: GroupNode | None, node_id) -> int | None:
         """Index in `group` of the child that is, or contains, node_id."""
         chain = self.chain(node_id)
         if group is None:
@@ -160,7 +160,7 @@ class _Tree:
         return None
 
 
-def reconcile_tree(root: list, new_order: list, moved_hint: Iterable[str] = ()) -> Optional[list]:
+def reconcile_tree(root: list, new_order: list, moved_hint: Iterable[str] = ()) -> list | None:
     """Return a new tree whose flattened order is `new_order`.
 
     `root` is not modified. Returns None if `new_order` is not a
@@ -207,7 +207,7 @@ def _place_moved(root: list, new_order: list, moved: set) -> list:
                and prev_chain[common_depth] is next_chain[common_depth]):
             common_depth += 1
         common = prev_chain[common_depth - 1] if common_depth else None
-        candidates = [common] + prev_chain[common_depth:] + next_chain[common_depth:]
+        candidates = [common, *prev_chain[common_depth:], *next_chain[common_depth:]]
 
         target = common
         for c in candidates:

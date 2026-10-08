@@ -1,22 +1,20 @@
 """Tests for the View's tree_utils helpers."""
 
+from layer_order_plus_qgis4.model import new_group_id
 from layer_order_plus_qgis4.tree_utils import (
+    ROLE_ID,
+    ROLE_TYPE,
     TYPE_GROUP,
     TYPE_LAYER,
-    ROLE_TYPE,
-    ROLE_ID,
     find_group_item,
     find_layer_item,
 )
-from layer_order_plus_qgis4.model import new_group_id
-
 
 # ---------- helpers ----------
 
 def _make_group(name, gid=None):
     """Build a group QTreeWidgetItem with the right roles set."""
     from PyQt6.QtWidgets import QTreeWidgetItem
-    from PyQt6.QtCore import Qt
     it = QTreeWidgetItem([name])
     it.setData(0, ROLE_TYPE, TYPE_GROUP)
     it.setData(0, ROLE_ID, gid or new_group_id())

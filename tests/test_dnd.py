@@ -14,7 +14,6 @@ from layer_order_plus_qgis4.model import GroupNode, LayerNode, LayerOrderModel
 from layer_order_plus_qgis4.tree_utils import ROLE_ID, ROLE_TYPE, TYPE_GROUP, find_group_item, find_layer_item
 from layer_order_plus_qgis4.tree_widget import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
 
-
 # ---------- helpers ----------
 
 def _build(spec):

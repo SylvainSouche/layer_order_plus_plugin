@@ -1,15 +1,5 @@
 """Reconcile the Plus tree with a flat order coming from the stock Layer Order panel."""
-import os
-import sys
-import types
 
-PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PLUGIN_ROOT not in sys.path:
-    sys.path.insert(0, PLUGIN_ROOT)
-if "layer_order_plus_qgis4" not in sys.modules:
-    pkg = types.ModuleType("layer_order_plus_qgis4")
-    pkg.__path__ = [PLUGIN_ROOT]
-    sys.modules["layer_order_plus_qgis4"] = pkg
 
 from layer_order_plus_qgis4.model import GroupNode, LayerNode
 from layer_order_plus_qgis4.reconcile import reconcile_tree
@@ -93,18 +83,8 @@ def test_user_scenario_never_loses_groups():
     for order, moved in steps:
         tree = reconcile_tree(tree, list(order), [moved])
         assert tree is not None
-        flat = []
-        def walk(ns, groups):
-            for n in ns:
-                if isinstance(n, GroupNode):
-                    groups.add(n.id)
-                    walk(n.children, groups)
-                else:
-                    flat.append(n.id)
-        groups = set()
-        walk(tree, groups)
-        assert "".join(flat) == order
-        assert groups == {"ABCD", "AB", "CD"}
+        assert "".join(_flat(tree)) == order
+        assert _group_ids(tree) == {"ABCD", "AB", "CD"}
     # E ended up inside AB in step 4; moving it to the very end takes it
     # past CD, so it leaves every group
     assert _shape(tree) == [("ABCD", [("AB", ["A", "B"]), ("CD", ["C", "D"])]), "E"]
@@ -148,6 +128,11 @@ def _parents(nodes, parent=None, out=None):
     return out
 
 
+def _group_ids(nodes):
+    return {n.id for n in nodes if isinstance(n, GroupNode)} | {
+        g for n in nodes if isinstance(n, GroupNode) for g in _group_ids(n.children)}
+
+
 def _flat(nodes):
     return [x for n in nodes for x in (_flat(n.children) if isinstance(n, GroupNode) else [n.id])]
 
@@ -163,12 +148,12 @@ def test_dragging_one_layer_never_regroups_another():
             return
         rest = [x for x in _flat(tree) if x != "E"]
         for pos in range(len(rest) + 1):
-            new = rest[:pos] + ["E"] + rest[pos:]
+            new = [*rest[:pos], "E", *rest[pos:]]
             if new == _flat(tree):
                 continue
             result = reconcile_tree(tree, new, ["E"])
             before, after = _parents(tree), _parents(result)
-            assert all(before[l] == after[l] for l in "ABCD"), (new, _shape(tree), _shape(result))
+            assert all(before[lid] == after[lid] for lid in "ABCD"), (new, _shape(tree), _shape(result))
             assert _flat(result) == new
             checked += 1
             explore(result, depth - 1)

@@ -98,7 +98,7 @@ step is recorded.
 
 ## Drag and drop
 
-`BetterLayerTree.dropEvent` sets `IgnoreAction` (Qt must not move rows) and
+`LayerOrderTree.dropEvent` sets `IgnoreAction` (Qt must not move rows) and
 emits `drop_intent(moving_ids, target_id, position)`:
 
 | position | meaning | Model operation |

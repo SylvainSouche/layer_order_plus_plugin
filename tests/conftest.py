@@ -214,10 +214,10 @@ def qapp():
 
 @pytest.fixture
 def tree(qapp):
-    """Provide a fresh BetterLayerTree (QTreeWidget subclass)."""
+    """Provide a fresh LayerOrderTree (QTreeWidget subclass)."""
     # Import after stubs are installed
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from layer_order_plus_qgis4.tree_widget import BetterLayerTree
-    t = BetterLayerTree()
+    from layer_order_plus_qgis4.tree_widget import LayerOrderTree
+    t = LayerOrderTree()
     yield t
     t.deleteLater()

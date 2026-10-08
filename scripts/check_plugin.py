@@ -80,7 +80,8 @@ def check_metadata(expected_version: str) -> None:
     elif icon:
         ok(f"icon present: {icon}")
 
-    ok(f"qgisMinimumVersion={g.get('qgisMinimumVersion')} qgisMaximumVersion={g.get('qgisMaximumVersion', '')}")
+    ok(f"qgisMinimumVersion={g.get('qgisMinimumVersion')} "
+       f"qgisMaximumVersion={g.get('qgisMaximumVersion', '')}")
 
 
 def check_python_syntax() -> None:

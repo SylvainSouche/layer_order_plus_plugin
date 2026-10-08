@@ -1,4 +1,4 @@
-"""BetterLayerTree — a QTreeWidget that reports intents and never acts on them.
+"""LayerOrderTree — a QTreeWidget that reports intents and never acts on them.
 
 Qt item views normally change themselves in response to the user: a drop
 moves rows, a click on a checkbox flips it (and, with auto-tristate, its
@@ -13,6 +13,8 @@ The ViewController decides what happens, updates the Model, and the View is
 re-rendered from the Model. The tree's only own state is presentation:
 selection, scroll position, hover, and the drop indicator.
 """
+import logging
+
 from qgis.PyQt.QtCore import QEvent, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QDropEvent
 from qgis.PyQt.QtWidgets import (
@@ -25,9 +27,9 @@ from qgis.PyQt.QtWidgets import (
     QTreeWidgetItem,
 )
 
-from .logger import _vlog
 from .tree_utils import ROLE_ID, ROLE_TYPE, TYPE_GROUP
 
+log = logging.getLogger("LayerOrderPlus.tree")
 
 # Semantic drop positions
 DROP_ON = "on"          # onto an item
@@ -39,7 +41,7 @@ DROP_END = "end"        # empty area below the last row → bottom of the top le
 class _CheckIntentDelegate(QStyledItemDelegate):
     """Turns checkbox clicks into an intent instead of toggling the item."""
 
-    def __init__(self, tree: "BetterLayerTree"):
+    def __init__(self, tree: "LayerOrderTree"):
         super().__init__(tree)
         self._tree = tree
 
@@ -65,7 +67,7 @@ class _CheckIntentDelegate(QStyledItemDelegate):
         return super().editorEvent(event, model, option, index)
 
 
-class BetterLayerTree(QTreeWidget):
+class LayerOrderTree(QTreeWidget):
     """QTreeWidget that emits intents instead of mutating itself."""
 
     drop_intent = pyqtSignal(list, str, str)    # moving_ids (display order), target_id, position
@@ -138,8 +140,8 @@ class BetterLayerTree(QTreeWidget):
         return tuple(reversed(key))
 
     def moving_items(self):
-        """Selected visible items without a selected ancestor, in display order."""
-        selected = [it for it in self.selectedItems() if not it.isHidden()]
+        """Selected items without a selected ancestor, in display order."""
+        selected = self.selectedItems()
         selected_ids = {id(x) for x in selected}
 
         def has_selected_ancestor(it):
@@ -190,5 +192,5 @@ class BetterLayerTree(QTreeWidget):
             target_id = target.data(0, ROLE_ID)
 
         moving_ids = [it.data(0, ROLE_ID) for it in moving]
-        _vlog(f"[TW] drop_intent: moving={moving_ids} target={target_id} pos={position}")
+        log.debug("drop intent: moving=%s target=%s pos=%s", moving_ids, target_id, position)
         self.drop_intent.emit(moving_ids, target_id, position)

@@ -25,16 +25,13 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import uuid
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Iterator, Optional, Union
 
-try:
-    from .logger import _vlog, _vlog_error
-except ImportError:  # pragma: no cover - standalone use
-    def _vlog(msg): pass
-    def _vlog_error(name, exc): pass
+log = logging.getLogger("LayerOrderPlus.model")
 
 
 # ====================================================================
@@ -76,7 +73,7 @@ class GroupNode:
         return True
 
 
-Node = Union[GroupNode, LayerNode]
+Node = GroupNode | LayerNode
 
 
 def new_group_id() -> str:
@@ -178,10 +175,10 @@ class LayerOrderModel:
         for cb in list(self._listeners):  # a listener may remove itself
             try:
                 cb(event_type, payload)
-            except Exception as exc:
+            except Exception:
                 # One failing listener must not break the others, but it
                 # must not vanish either.
-                _vlog_error(f"[M] listener for {event_type}", exc)
+                log.exception("listener failed on %s", event_type)
 
     def _structure_changed(self, event_type: str, payload: dict) -> None:
         self._emit(event_type, payload)
@@ -194,7 +191,7 @@ class LayerOrderModel:
         """Top-level nodes. Read-only: never mutate what this returns."""
         return self._root
 
-    def walk(self) -> Iterator[tuple[Node, Optional[GroupNode]]]:
+    def walk(self) -> Iterator[tuple[Node, GroupNode | None]]:
         """Yield (node, parent) for every node, pre-order (display order)."""
         def rec(nodes, parent):
             for n in nodes:
@@ -203,17 +200,17 @@ class LayerOrderModel:
                     yield from rec(n.children, n)
         yield from rec(self._root, None)
 
-    def find_item(self, item_id: str) -> Optional[Node]:
+    def find_item(self, item_id: str) -> Node | None:
         return next((n for n, _ in self.walk() if n.id == item_id), None)
 
-    def find_parent(self, item_id: str) -> Optional[GroupNode]:
+    def find_parent(self, item_id: str) -> GroupNode | None:
         """Parent group of `item_id`, or None if top-level (or unknown)."""
         return next((p for n, p in self.walk() if n.id == item_id), None)
 
-    def _siblings(self, parent: Optional[GroupNode]) -> list[Node]:
+    def _siblings(self, parent: GroupNode | None) -> list[Node]:
         return parent.children if parent is not None else self._root
 
-    def get_index_in_parent(self, item_id: str) -> Optional[int]:
+    def get_index_in_parent(self, item_id: str) -> int | None:
         siblings = self._siblings(self.find_parent(item_id))
         return next((i for i, s in enumerate(siblings) if s.id == item_id), None)
 
@@ -302,7 +299,7 @@ class LayerOrderModel:
         Malformed input (bad JSON, nodes without id) is tolerated: bad JSON
         gives an empty tree, malformed nodes are skipped.
         """
-        _vlog("[M] load_from_json")
+        log.debug("load_from_json")
         new_root: list[Node] = []
         if raw_json:
             try:
@@ -316,7 +313,7 @@ class LayerOrderModel:
         self._root = new_root
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
-    def _build_node(self, raw) -> Optional[Node]:
+    def _build_node(self, raw) -> Node | None:
         if not isinstance(raw, dict):
             return None
         t = raw.get("type")
@@ -334,7 +331,7 @@ class LayerOrderModel:
 
     def replace_root(self, nodes: list[Node]) -> None:
         """Swap in a tree computed elsewhere (e.g. reconcile with QGIS)."""
-        _vlog("[M] replace_root")
+        log.debug("replace_root")
         self._root = list(nodes)
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
@@ -346,7 +343,7 @@ class LayerOrderModel:
         dropped, layers added since are kept next to their current flat
         neighbour. Layer names and visibility keep their current values.
         """
-        _vlog("[M] restore_structure")
+        log.debug("restore_structure")
         current = {n.id: n for n, _ in self.walk() if isinstance(n, LayerNode)}
         current_order = self.get_flattened_layer_ids()
 
@@ -383,7 +380,7 @@ class LayerOrderModel:
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
     def clear(self) -> None:
-        _vlog("[M] clear")
+        log.debug("clear")
         self._root = []
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
@@ -391,10 +388,10 @@ class LayerOrderModel:
     # Layers
     # ------------------------------------------------------------------
     def add_layer(self, layer_id: str, name: str, visible: bool = True,
-                  parent_id: Optional[str] = None,
-                  index: Optional[int] = None) -> None:
+                  parent_id: str | None = None,
+                  index: int | None = None) -> None:
         """Add a layer under `parent_id` (None = top level) at `index` (None = end)."""
-        _vlog(f"[M] add_layer {layer_id}")
+        log.debug(f"add_layer {layer_id}")
         parent = self.find_item(parent_id) if parent_id else None
         if not isinstance(parent, GroupNode):
             parent = None
@@ -407,7 +404,7 @@ class LayerOrderModel:
         })
 
     def add_layer_beside(self, layer_id: str, name: str, visible: bool,
-                         anchor_id: Optional[str], after: bool) -> None:
+                         anchor_id: str | None, after: bool) -> None:
         """Add a layer just before/after `anchor_id`, in the anchor's group.
 
         Unknown or missing anchor → top of the top level.
@@ -422,7 +419,7 @@ class LayerOrderModel:
 
     def remove_layer(self, layer_id: str) -> None:
         """Remove a layer; prune groups left empty if the setting says so."""
-        _vlog(f"[M] remove_layer {layer_id}")
+        log.debug(f"remove_layer {layer_id}")
         siblings = self._siblings(self.find_parent(layer_id))
         for i, sib in enumerate(siblings):
             if sib.id == layer_id and isinstance(sib, LayerNode):
@@ -451,10 +448,10 @@ class LayerOrderModel:
     # ------------------------------------------------------------------
     # Groups
     # ------------------------------------------------------------------
-    def create_group(self, name: str, parent_id: Optional[str] = None,
-                     index: Optional[int] = None) -> str:
+    def create_group(self, name: str, parent_id: str | None = None,
+                     index: int | None = None) -> str:
         """Create an empty group; returns its id."""
-        _vlog(f"[M] create_group {name!r}")
+        log.debug(f"create_group {name!r}")
         parent = self.find_item(parent_id) if parent_id else None
         if not isinstance(parent, GroupNode):
             parent = None
@@ -470,7 +467,7 @@ class LayerOrderModel:
 
     def delete_group(self, group_id: str, unwrap_children: bool = True) -> None:
         """Delete a group; with `unwrap_children` its children take its place."""
-        _vlog(f"[M] delete_group {group_id}")
+        log.debug(f"delete_group {group_id}")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -507,38 +504,21 @@ class LayerOrderModel:
     # ------------------------------------------------------------------
     # Moves
     # ------------------------------------------------------------------
-    def move_item(self, item_id: str, new_parent_id: Optional[str], new_index: int) -> None:
-        """Move one node to `new_parent_id` at `new_index` (index before removal).
+    def move_item(self, item_id: str, new_parent_id: str | None, new_index: int) -> bool:
+        """Index-based form of move_items() for scripting and tests.
 
-        Index-based convenience kept for scripting/tests; UI code uses the
-        anchor-based move_items(). Moves never prune empty groups.
+        `new_index` is a position in the target parent *before* the item is
+        taken out (i.e. "insert before the node currently at new_index").
         """
-        node = self.find_item(item_id)
-        if node is None:
-            return
-        new_parent = self.find_item(new_parent_id) if new_parent_id else None
-        if not isinstance(new_parent, GroupNode):
-            new_parent = None
-        if new_parent is not None and self._is_descendant(new_parent, node):
-            return
-        old_parent = self.find_parent(item_id)
-        old_index = self.get_index_in_parent(item_id)
-        if old_parent is new_parent and old_index < new_index:
-            new_index -= 1  # account for the removal
-        if old_parent is new_parent and new_index == old_index:
-            return
-        self._siblings(old_parent).pop(old_index)
-        new_siblings = self._siblings(new_parent)
-        new_index = max(0, min(new_index, len(new_siblings)))
-        new_siblings.insert(new_index, node)
-        self._structure_changed(EVENT_ITEM_MOVED, {
-            "item_ids": [item_id],
-            "new_parent_id": new_parent.id if new_parent else None,
-            "new_index": new_index,
-        })
+        parent = self.find_item(new_parent_id) if new_parent_id else None
+        siblings = self._siblings(parent if isinstance(parent, GroupNode) else None)
+        before = siblings[new_index].id if 0 <= new_index < len(siblings) else None
+        if before == item_id:
+            return False
+        return self.move_items([item_id], new_parent_id, before)
 
-    def move_items(self, item_ids: list[str], new_parent_id: Optional[str],
-                   before_id: Optional[str] = None) -> bool:
+    def move_items(self, item_ids: list[str], new_parent_id: str | None,
+                   before_id: str | None = None) -> bool:
         """Atomically move nodes into `new_parent_id` (None = top level).
 
         The nodes are inserted as one contiguous block, in the given order,
@@ -551,7 +531,7 @@ class LayerOrderModel:
         parent, anchor not a child of the parent or itself a mover, cycle)
         or changes nothing.
         """
-        _vlog(f"[M] move_items ids={item_ids} parent={new_parent_id} before={before_id}")
+        log.debug(f"move_items ids={item_ids} parent={new_parent_id} before={before_id}")
         nodes = [n for n in (self.find_item(i) for i in item_ids) if n is not None]
         movers: list[Node] = []
         for n in nodes:
@@ -593,11 +573,10 @@ class LayerOrderModel:
 
     def move_items_to_boundary(self, item_ids: list[str], to_top: bool) -> None:
         """Move each item to the top (or bottom) of its own parent, keeping their order."""
-        _vlog("[M] move_items_to_boundary")
+        log.debug("move_items_to_boundary")
         by_parent: dict = {}
-        for item_id, idx in sorted(((i, self.get_index_in_parent(i)) for i in item_ids
-                                    if self.get_index_in_parent(i) is not None),
-                                   key=lambda t: t[1]):
+        positioned = [i for i in item_ids if self.get_index_in_parent(i) is not None]
+        for item_id in sorted(positioned, key=self.get_index_in_parent):
             parent = self.find_parent(item_id)
             by_parent.setdefault(id(parent), (parent, []))[1].append(item_id)
         moved = False
@@ -657,7 +636,7 @@ class LayerOrderModel:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _is_descendant(self, candidate: Optional[Node], ancestor: Optional[Node]) -> bool:
+    def _is_descendant(self, candidate: Node | None, ancestor: Node | None) -> bool:
         """True if `candidate` is `ancestor` or lies anywhere below it."""
         if candidate is None or ancestor is None:
             return False

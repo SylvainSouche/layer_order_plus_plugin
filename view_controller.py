@@ -17,13 +17,13 @@ Model, and it does exactly two things:
 It never touches QGIS and never reads state back from the View: intents
 carry their data.
 """
+import logging
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Callable, Optional
 
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QIcon, QUndoStack
 
-from .logger import _log, _vlog
 from .model import (
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_RENAMED,
@@ -44,6 +44,8 @@ from .tree_widget import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
 from .undo import TreeStateCommand
 from .view import LayerOrderView
 
+log = logging.getLogger("LayerOrderPlus.view_controller")
+
 
 class ViewController(QObject):
     """Mediator between LayerOrderView and LayerOrderModel. Owns the undo stack."""
@@ -53,7 +55,7 @@ class ViewController(QObject):
     control_requested = pyqtSignal(bool)            # take over the rendering order
 
     def __init__(self, model: LayerOrderModel, view: LayerOrderView,
-                 layer_icon: Optional[Callable[[str], QIcon]] = None, parent=None):
+                 layer_icon: Callable[[str], QIcon] | None = None, parent=None):
         super().__init__(parent)
         self._model = model
         self._view = view
@@ -223,7 +225,7 @@ class ViewController(QObject):
         movers = self._in_tree_order(moving_ids)
         if not movers:
             return
-        _log(f"[VC] drop: moving={movers} target={target_id} pos={position}")
+        log.debug("drop: moving=%s target=%s pos=%s", movers, target_id, position)
 
         if position == DROP_END:
             with self._user_edit("Reorder layers"):
@@ -233,7 +235,7 @@ class ViewController(QObject):
 
         target = model.find_item(target_id)
         if target is None or target_id in movers:
-            _vlog(f"[VC] drop: invalid target {target_id}")
+            log.debug("drop: invalid target %s", target_id)
             return
         parent = model.find_parent(target_id)
         parent_id = parent.id if parent is not None else None
@@ -243,7 +245,7 @@ class ViewController(QObject):
                 # Onto a layer → new group at the target's slot: [target, movers...]
                 gid = model.create_group(model.unique_group_name(), parent_id=parent_id,
                                          index=model.get_index_in_parent(target_id))
-                if model.move_items([target_id] + movers, gid):
+                if model.move_items([target_id, *movers], gid):
                     model.set_expanded(gid, True)
                 else:
                     model.delete_group(gid, unwrap_children=False)
@@ -263,7 +265,7 @@ class ViewController(QObject):
         order = self._model.tree_order_key()
         return sorted((i for i in dict.fromkeys(item_ids) if i in order), key=order.get)
 
-    def _next_sibling_id(self, item_id: str, exclude: set) -> Optional[str]:
+    def _next_sibling_id(self, item_id: str, exclude: set) -> str | None:
         """First sibling after `item_id` not in `exclude`, or None (= end)."""
         parent = self._model.find_parent(item_id)
         siblings = parent.children if parent is not None else self._model.get_root()
