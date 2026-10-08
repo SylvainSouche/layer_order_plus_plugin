@@ -108,3 +108,70 @@ def test_user_scenario_never_loses_groups():
     # E ended up inside AB in step 4; moving it to the very end takes it
     # past CD, so it leaves every group
     assert _shape(tree) == [("ABCD", [("AB", ["A", "B"]), ("CD", ["C", "D"])]), "E"]
+
+
+# ---------- ambiguous moves without a drag hint ----------
+
+def test_ambiguous_move_into_group_keeps_neighbour_in_group():
+    """E above ABCD, dropped between A and B: 'E A B C D' → 'A E B C D'.
+    Read as 'A moved up', A would leave AB (the 1.2.27 bug report)."""
+    tree = ["E", ("ABCD", [("AB", ["A", "B"]), ("CD", ["C", "D"])])]
+    assert _stock_move(tree, "AEBCD") == [("ABCD", [("AB", ["A", "E", "B"]), ("CD", ["C", "D"])])]
+
+
+def test_ambiguous_swap_across_group_edge_keeps_group():
+    # X (G: Y) → Y X : read as "X moved down", not "Y left its group"
+    assert _stock_move(["X", ("G", ["Y"])], "YX") == [("G", ["Y"]), "X"]
+
+
+def test_user_scenario_1_2_27_without_hints():
+    tree = _build(ABCD)
+    # E: between A and B, then to the very top, then back between A and B
+    for order, expected in [
+        ("AEBCD", [("ABCD", [("AB", ["A", "E", "B"]), ("CD", ["C", "D"])])]),
+        ("EABCD", [("ABCD", [("AB", ["E", "A", "B"]), ("CD", ["C", "D"])])]),  # edge: stays in AB
+        ("AEBCD", [("ABCD", [("AB", ["A", "E", "B"]), ("CD", ["C", "D"])])]),
+    ]:
+        tree = reconcile_tree(tree, list(order))
+        assert _shape(tree) == expected, order
+
+
+# ---------- invariant: only the dragged layer can change group ----------
+
+def _parents(nodes, parent=None, out=None):
+    out = {} if out is None else out
+    for n in nodes:
+        if isinstance(n, GroupNode):
+            _parents(n.children, n.id, out)
+        else:
+            out[n.id] = parent
+    return out
+
+
+def _flat(nodes):
+    return [x for n in nodes for x in (_flat(n.children) if isinstance(n, GroupNode) else [n.id])]
+
+
+def test_dragging_one_layer_never_regroups_another():
+    """Every sequence of up to 4 stock-panel drags of E (with the drag hint
+    the Controller always has): no other layer may change group."""
+    checked = 0
+
+    def explore(tree, depth):
+        nonlocal checked
+        if depth == 0:
+            return
+        rest = [x for x in _flat(tree) if x != "E"]
+        for pos in range(len(rest) + 1):
+            new = rest[:pos] + ["E"] + rest[pos:]
+            if new == _flat(tree):
+                continue
+            result = reconcile_tree(tree, new, ["E"])
+            before, after = _parents(tree), _parents(result)
+            assert all(before[l] == after[l] for l in "ABCD"), (new, _shape(tree), _shape(result))
+            assert _flat(result) == new
+            checked += 1
+            explore(result, depth - 1)
+
+    explore(_build(ABCD), 4)
+    assert checked == 340

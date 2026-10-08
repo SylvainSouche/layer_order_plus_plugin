@@ -65,11 +65,9 @@ class LayerOrderController(QObject):
         self._loading = False    # a project is being loaded into the Model
 
         self._apply_timer = self._timer(APPLY_DEBOUNCE_MS, self._apply_custom_order)
-        # The stock Layer Order panel changes the order in two steps per drag
-        # (insert at the new row — layer listed twice — then remove the old
-        # row). Reconcile once, on the final order, one loop turn later.
-        self._reconcile_timer = self._timer(0, self._reconcile_pending)
-        self._dragged_hint: set = set()
+        # Layers seen listed twice in the stock Layer Order panel's mid-drag
+        # state; they are the dragged layers once the drag completes.
+        self._dragged: set = set()
         # New layers have no layer-tree node yet when layersAdded fires, so
         # placing them (next to their Layers-panel neighbours) waits a turn.
         self._place_timer = self._timer(0, self._place_pending_layers)
@@ -104,7 +102,7 @@ class LayerOrderController(QObject):
 
     def teardown(self) -> None:
         """Disconnect from QGIS and save the document (plugin unload)."""
-        for t in (self._apply_timer, self._reconcile_timer, self._place_timer):
+        for t in (self._apply_timer, self._place_timer):
             t.stop()
         for signal, slot in self._connections:
             try:
@@ -301,37 +299,42 @@ class LayerOrderController(QObject):
             self._applying = False
 
     def _on_custom_order_changed(self) -> None:
-        """Custom order changed outside Plus → schedule a reconcile.
+        """Custom order changed outside Plus → reconcile, synchronously.
+
+        The stock Layer Order panel applies a drag in two steps: it inserts
+        the layer at its new row (the layer is then listed twice), then
+        removes the old row. That drag runs its own event loop, so anything
+        deferred could run between the two steps. Each signal is therefore
+        handled at once, in arrival order:
+
+        * a state with duplicates is mid-drag: remember the duplicated
+          layers (they are the dragged ones) and wait;
+        * the next clean state completes the drag: reconcile with that
+          exact hint.
 
         Skipped for our own writes, while loading, and while a Plus change
-        is waiting to be applied (QGIS's order is then stale and reconciling
-        would revert the user's edit). The stock panel's intermediate state
-        (a layer listed twice) is only used as a hint of what was dragged.
+        is waiting to be applied (QGIS's order is then stale).
         """
-        if (self._applying or self._loading or self._apply_timer.isActive()
-                or not self._model.get_control_enabled()):
+        if self._applying or self._loading:
             return
-        seen: set = set()
-        for lyr in QgsProject.instance().layerTreeRoot().customLayerOrder():
-            if lyr.id() in seen:
-                self._dragged_hint.add(lyr.id())
-            seen.add(lyr.id())
-        self._reconcile_timer.start()
-
-    def _reconcile_pending(self) -> None:
-        hint, self._dragged_hint = self._dragged_hint, set()
-        if (self._applying or self._loading or self._apply_timer.isActive()
-                or not self._model.get_control_enabled()):
+        if self._apply_timer.isActive() or not self._model.get_control_enabled():
+            self._dragged.clear()
             return
         qgis_order = [lyr.id() for lyr in QgsProject.instance().layerTreeRoot().customLayerOrder()]
+        seen: set = set()
+        duplicates = {lid for lid in qgis_order if lid in seen or seen.add(lid)}
+        if duplicates:
+            self._dragged |= duplicates
+            return
+        dragged, self._dragged = self._dragged, set()
         if qgis_order == self._model.get_flattened_layer_ids():
             return
-        new_root = reconcile_tree(self._model.get_root(), qgis_order, hint)
+        new_root = reconcile_tree(self._model.get_root(), qgis_order, dragged)
         if new_root is None:
             # Not a pure reorder (layers being added/removed): those paths handle it
             _vlog("[C] reconcile skipped: QGIS order is not a permutation of Plus layers")
             return
-        _log(f"[C] reconciled with QGIS order (moved hint: {sorted(hint)})")
+        _log(f"[C] reconciled with QGIS order (dragged: {sorted(dragged)})")
         self._model.replace_root(new_root)
 
     def _apply_custom_order(self) -> None:
@@ -358,7 +361,7 @@ class LayerOrderController(QObject):
     def _on_model_event(self, event_type: str, payload: dict) -> None:
         if self._loading:
             return
-        if event_type == EVENT_ORDER_CHANGED:
+        if event_type == EVENT_ORDER_CHANGED and not self._qgis_has_model_order():
             self._apply_timer.start()
         if event_type in _DOCUMENT_EVENTS:
             self._save_document()
@@ -366,6 +369,14 @@ class LayerOrderController(QObject):
             proj = QgsProject.instance()
             proj.writeEntry(ENTRY_SCOPE, ENTRY_REMOVE_EMPTY, bool(payload["value"]))
             proj.setDirty(True)
+
+    def _qgis_has_model_order(self) -> bool:
+        """True if QGIS already renders the Model's order (e.g. right after a
+        reconcile). Scheduling an apply then would be a no-op that only
+        blocks the next stock-panel drag while pending."""
+        root = QgsProject.instance().layerTreeRoot()
+        return (root.hasCustomLayerOrder()
+                and [lyr.id() for lyr in root.customLayerOrder()] == self._model.get_flattened_layer_ids())
 
     def _save_document(self) -> None:
         """Store the document in the project (saved to disk with the project)."""
