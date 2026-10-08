@@ -562,9 +562,11 @@ class LayerOrderModel:
             "new_index": new_index,
         })
         self._emit(EVENT_ORDER_CHANGED, {})
-        # Prune empty groups if the setting is on and the old parent is now empty
-        if self._remove_empty_groups and old_parent is not None and len(old_parent.children) == 0:
-            self._prune_empty_groups_internal()
+        # NOTE: Do NOT prune empty groups on move_item. The user may be
+        # moving items out temporarily and wants to drop them back in.
+        # Pruning only happens on layer deletion (remove_layer), not on
+        # moves. The "remove empty groups" setting controls layer-delete
+        # pruning, not move pruning.
 
     def move_items_to_boundary(self, item_ids: list[str], to_top: bool) -> None:
         """Move each item to the top (or bottom) of its respective parent.

@@ -111,10 +111,11 @@ def test_move_items_to_bottom_single():
 # BUG-4: Moving all items out of a group leaves an empty group
 # ====================================================================
 
-def test_move_all_items_out_of_group_prunes_empty():
-    """With remove_empty_groups=True, moving all items out should prune the group.
+def test_move_all_items_out_of_group_does_not_prune():
+    """Moving all items out of a group does NOT prune it.
 
-    BUG-4: move_item never prunes empty groups → leaves [A, B, Group1()].
+    Pruning only happens on layer DELETION, not on moves. The user may
+    be moving items out temporarily and wants to drop them back in.
     """
     model = _make_model_with_tree([
         ("group", "g1", "Group1", [
@@ -127,8 +128,10 @@ def test_move_all_items_out_of_group_prunes_empty():
     model.move_item("a", None, 0)
     # Move B to top-level
     model.move_item("b", None, 1)
-    # Group1 should be pruned (it's now empty)
-    assert model.find_item("g1") is None, "Empty group should be pruned after move_item"
+    # Group1 should still exist (empty) — NOT pruned
+    grp = model.find_item("g1")
+    assert grp is not None, "Empty group should persist after move (not a delete)"
+    assert len(grp.children) == 0
     assert _flat_ids(model) == ["a", "b"]
 
 

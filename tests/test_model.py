@@ -430,14 +430,17 @@ def test_move_item_into_group(model):
 def test_move_item_out_of_group(model):
     """Move a layer out of a group to top-level.
 
-    With remove_empty_groups=True (default), the now-empty group is pruned.
+    Groups are NOT pruned on move (only on layer deletion). The empty
+    group persists so the user can drop items back in.
     """
     gid = model.create_group("Group")
     model.add_layer("l1", "L1", parent_id=gid)
     model.move_item("l1", None, 0)
-    # Group is now empty → pruned (remove_empty_groups defaults to True)
-    assert [n.id for n in model.get_root()] == ["l1"]
-    assert model.find_item(gid) is None
+    # Group persists (empty) — not pruned on move
+    assert [n.id for n in model.get_root()] == ["l1", gid]
+    grp = model.find_item(gid)
+    assert grp is not None
+    assert len(grp.children) == 0
 
 
 def test_move_item_out_of_group_keeps_empty_when_setting_off(model):
