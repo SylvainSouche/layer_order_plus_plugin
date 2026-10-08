@@ -201,12 +201,21 @@ class ViewController(QObject):
                 name = self._view.get_unique_group_name(name)
 
             before = self._model.serialize()
-            parent_id, index = self._view.resolve_anchor_for_insertion()
+            selected_ids = self._view.get_selected_item_ids()
+
+            # Determine where to create the new group.
+            # If multiple items are selected, the new group should be a SIBLING
+            # of the selected items (at their common parent level), NOT a child
+            # of one of them. Insert after the last selected item.
+            if len(selected_ids) >= 2:
+                # Find the common parent + insertion index
+                parent_id, index = self._resolve_common_parent_for_creation(selected_ids)
+            else:
+                parent_id, index = self._view.resolve_anchor_for_insertion()
+
             gid = self._model.create_group(name, parent_id=parent_id, index=index)
 
             # Move selected items into the new group, preserving order.
-            # Insert at incrementing indices so first selected ends up first.
-            selected_ids = self._view.get_selected_item_ids()
             insert_index = 0
             for item_id in selected_ids:
                 self._model.move_item(item_id, gid, insert_index)
@@ -221,6 +230,37 @@ class ViewController(QObject):
         except Exception as e:
             _log(f"_on_create_group FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
+
+    def _resolve_common_parent_for_creation(self, selected_ids):
+        """Find the common parent + insertion index for a new group.
+
+        When creating a group from multiple selected items, the new group
+        should be a sibling of the selected items (at their common parent
+        level), inserted after the last selected item.
+
+        Returns (parent_id, index) where parent_id is the common parent
+        (or None for top-level) and index is the insertion position.
+        """
+        _vlog_method("_resolve_common_parent_for_creation")
+        # Find the parent of each selected item
+        parents = set()
+        max_index = -1
+        for item_id in selected_ids:
+            parent = self._model.find_parent(item_id)
+            parent_id = parent.id if parent is not None else None
+            parents.add(parent_id)
+            idx = self._model.get_index_in_parent(item_id)
+            if idx is not None and idx > max_index:
+                max_index = idx
+
+        # If all items share the same parent, create the new group there
+        if len(parents) == 1:
+            common_parent_id = parents.pop()
+            # Insert after the last selected item
+            return (common_parent_id, max_index + 1)
+        else:
+            # Items have different parents — fall back to top-level
+            return (None, None)
 
     def _on_rename_group(self):
         _vlog_method("_on_rename_group")

@@ -4,7 +4,7 @@ qgisMinimumVersion=4.0.0
 qgisMaximumVersion=4.99.0
 description=Layer Order panel with grouping (QGIS 4 / PyQt6 fork)
 about=Alternative to the Layer Order panel with order groups. Fork of the original Layer Order Plus 1.0.0 for QGIS 4: PyQt6 imports/enums, undo restores map draw order, folder and layer-type icons. Groups are for ordering only (not Layers-panel groups).
-version=1.2.11
+version=1.2.12
 author=Samuel Kultz (original); Sylvain Souche (QGIS 4 fork)
 email=samkultz@me.com
 category=Productivity
@@ -18,6 +18,7 @@ experimental=False
 deprecated=False
 server=False
 changelog=
+    1.2.12: Fix create-group-from-multiple-groups — new group was created INSIDE the last selected group instead of as a sibling
     1.2.11: Add reconciliation logging — verify (C,(A,B))→(A,C,B) removes only inner group; (C,(A,B))→(C,(B,A)) reorders within group
     1.2.10: Fix within-group reorder from native panel + smarter group deletion (only non-contiguous groups)
     1.2.9: Minimal group reconciliation (only remove conflicting groups) + push Plus order on control activate
