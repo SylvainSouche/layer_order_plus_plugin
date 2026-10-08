@@ -392,7 +392,8 @@ class BetterLayerOrderPlugin(QObject):
     # Event filter (intercepts Ctrl+Z when not editing a layer)
     # ==================================================================
     def eventFilter(self, obj, event):
-        _vlog_method("eventFilter")
+        # Don't log every eventFilter call — it fires on EVERY key/mouse event
+        # and floods the log. Only log when we actually intercept a shortcut.
         from qgis.PyQt.QtCore import QEvent
         if event.type() == QEvent.Type.ShortcutOverride:
             key = event.key()
@@ -404,11 +405,14 @@ class BetterLayerOrderPlugin(QObject):
             is_redo_y = (key == Qt.Key.Key_Y and mods == Qt.KeyboardModifier.ControlModifier)
             is_redo_shift = (key == Qt.Key.Key_Z and mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
             if (is_undo or is_redo_y or is_redo_shift) and not self._is_editing_layer():
+                _vlog_method("eventFilter")
                 if is_undo and self._undo_group and self._undo_group.canUndo():
+                    _log(f"eventFilter: intercepting Ctrl+Z → undo")
                     event.accept()
                     self._undo_group.undo()
                     return True
                 if (is_redo_y or is_redo_shift) and self._undo_group and self._undo_group.canRedo():
+                    _log(f"eventFilter: intercepting Ctrl+{'Y' if is_redo_y else 'Shift+Z'} → redo")
                     event.accept()
                     self._undo_group.redo()
                     return True
