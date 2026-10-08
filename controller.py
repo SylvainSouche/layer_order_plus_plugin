@@ -723,6 +723,10 @@ class LayerOrderController(QObject):
         _vlog_method("_apply_custom_order")
         # Set _in_apply so _on_custom_order_changed knows this order change
         # came from us (not from the user reordering in the native panel).
+        # The flag stays set for 200ms after apply completes to catch
+        # queued customLayerOrderChanged signals (Qt may queue the signal
+        # and fire it on the next event loop iteration, after _in_apply
+        # would have been cleared by the finally block).
         self._in_apply = True
         try:
             root = QgsProject.instance().layerTreeRoot()
@@ -748,7 +752,12 @@ class LayerOrderController(QObject):
             _log(f"_apply_custom_order FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
         finally:
-            self._in_apply = False
+            # Keep _in_apply True for 200ms to catch queued signals
+            QTimer.singleShot(200, self._clear_in_apply)
+
+    def _clear_in_apply(self):
+        """Clear the _in_apply flag after a short delay."""
+        self._in_apply = False
 
     # ==================================================================
     # External control (plugin.py calls these during project load)
