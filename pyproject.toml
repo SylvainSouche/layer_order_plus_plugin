@@ -10,6 +10,9 @@ ignore = [
     "SIM105",                      # explicit try/except/pass reads better for Qt disconnects
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tree_model.py" = ["B008"]   # Qt's `parent: QModelIndex = QModelIndex()` override signatures
+
 [tool.ruff.lint.isort]
 known-first-party = ["layer_order_plus_qgis4"]
 known-third-party = ["qgis", "PyQt6"]

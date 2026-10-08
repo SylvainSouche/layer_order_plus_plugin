@@ -31,7 +31,7 @@ knows all of them.
 | Piece | Does | Never |
 |---|---|---|
 | **Model** `model.py` | Holds the document (groups, nesting, order, expanded, `remove_empty_groups`) and mirrors QGIS facts (layer names, effective visibility, `control_enabled`). All mutations, each followed by an event. | Import Qt or QGIS. |
-| **View** `view.py`, `tree_widget.py` | Renders what it is told (`render*`). Emits one intent signal per user action, carrying all data needed (ids, target, flag). Keeps presentation state: selection, scroll, filter. | Change what it displays because of its own input. Drops, checkbox clicks, branch arrows and settings boxes are reported, not applied. Read the Model. |
+| **View** `view.py`, `tree_model.py`, `tree_view.py` | Renders what it is told (`render*`). Emits one intent signal per user action, carrying all data needed (ids, target, flag). Keeps presentation state: selection, scroll. `tree_model.py` is the Qt item model presenting the rendered tree; `tree_view.py` the QTreeView. | Change what it displays because of its own input. Drops, checkbox clicks, branch arrows and settings boxes are reported, not applied. Read the Model. |
 | **ViewController** `view_controller.py` | Turns intents into Model transactions (one undo step each) or into requests for QGIS-owned state. Turns Model events into `render*` calls. | Touch QGIS. Read state back from the View. |
 | **Controller** `controller.py` | Mirrors QGIS into the Model; applies the Model's order to QGIS; persists the document; reconciles with the stock Layer Order panel. | Touch the View or the ViewController. |
 | **reconcile.py** | Pure function: infer the group tree for a new flat order. | Side effects. |
@@ -48,7 +48,7 @@ knows all of them.
 | Layer names | QGIS | Controller | no | (informative copy) |
 | Layer visibility | QGIS | Controller (on request) | no | no |
 | `control_enabled` | QGIS (`hasCustomLayerOrder`) | Controller (on request) | no | by QGIS |
-| Selection, scroll, filter | View | View | no | no |
+| Selection, scroll | View | View | no | no |
 
 Undo restores **structure only** (`Model.restore_structure`): layers QGIS
 added since are kept, layers it removed are not brought back, names and
@@ -96,10 +96,26 @@ step is recorded.
     becomes a sibling;
   * groups are never created or deleted.
 
+## The tree: Qt model/view without self-editing
+
+The tree is a `QTreeView` on `LayerOrderItemModel`, a read-only
+presentation of what the ViewController rendered. Qt's editing entry
+points are turned into intents and always refuse the edit:
+
+| Qt entry point | Intent | Qt then |
+|---|---|---|
+| `dropMimeData(mime, row, parent)` | `drop_intent(ids, target, position)` | returns False → no row moves, source rows are not removed |
+| `setData(index, CheckStateRole)` | `check_intent(id, checked)` | returns False → checkbox unchanged until rendered |
+| branch arrow, double-click, ←/→ (`LayerOrderTree`) | `expand_intent(id, expanded)` | `itemsExpandable` is off → nothing expands by itself |
+
+`render()` keeps item identity: when the set of ids is unchanged it is a
+layout change with persistent indexes remapped by id, so selection,
+expansion and scroll survive without being re-applied by hand.
+
 ## Drag and drop
 
-`LayerOrderTree.dropEvent` sets `IgnoreAction` (Qt must not move rows) and
-emits `drop_intent(moving_ids, target_id, position)`:
+`dropMimeData` translates Qt's `(row, parent)` into a semantic position,
+anchoring on the nearest sibling that is not itself being dragged:
 
 | position | meaning | Model operation |
 |---|---|---|
@@ -108,11 +124,20 @@ emits `drop_intent(moving_ids, target_id, position)`:
 | `above` / `below` | sibling of the target | `move_items(ids, parent, before_id)` |
 | `end` | empty area | `move_items(ids, None, None)` |
 
-`move_items` anchors on a sibling id, not an index, so multi-item drops
-can't be thrown off by shifting indices.
+Dropping into a dragged item's own subtree is refused in
+`canDropMimeData` (Qt shows the "no drop" cursor). `move_items` anchors on
+a sibling id, not an index, so multi-item drops can't be thrown off by
+shifting indices.
 
 ## Tests
 
-`make test` (PyQt6 + pytest, no QGIS needed): Model, reconcile, scenarios,
-and `test_dnd.py`, which drives the real View + ViewController + Model and
-asserts the View never acts on its own input.
+* `make test` — PyQt6 + pytest, no QGIS needed: Model, reconcile
+  (including an exhaustive "only the dragged layer changes group"
+  invariant), scenarios, and `test_dnd.py`, which drives the real View +
+  ViewController + Model and asserts the View never acts on its own input.
+* `make qgis-test` — `tests/qgis/check_*.py` inside a real headless QGIS
+  (uses `$QGIS_APP` or the newest `/Applications/QGIS*.app`): the full
+  user scenario, QGIS Layer Order panel drags with the event loop running
+  between its two steps, the native panel's display after toggling
+  control, and plugin load/unload + keyboard undo.
+* `make lint` — ruff.

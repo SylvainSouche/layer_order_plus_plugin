@@ -12,14 +12,14 @@ DIST_DIR     := $(PLUGIN_DIR)/dist
 ZIP_NAME     := $(PLUGIN_NAME)-$(VERSION).zip
 ZIP_PATH     := $(DIST_DIR)/$(ZIP_NAME)
 
-.PHONY: all zip sync clean show-version help check test
+.PHONY: all zip sync clean show-version help check test lint qgis-test
 
 all: zip
 
 help:
 	@echo "VERSION (from ./VERSION) = $(VERSION)"
 	@echo "Output zip               = $(ZIP_PATH)"
-	@echo "Targets: zip sync clean show-version check test"
+	@echo "Targets: zip sync clean show-version check lint test qgis-test"
 
 show-version:
 	@echo $(VERSION)
@@ -43,6 +43,13 @@ check:
 test:
 	@bash "$(PLUGIN_DIR)/scripts/run_tests.sh"
 
+lint:
+	ruff check "$(PLUGIN_DIR)"
+
+# End-to-end checks inside a real (headless) QGIS — see tests/qgis/
+qgis-test:
+	@bash "$(PLUGIN_DIR)/scripts/run_qgis_checks.sh"
+
 zip: sync
 	@mkdir -p "$(DIST_DIR)"
 	@echo "Building $(ZIP_NAME) ..."
@@ -60,6 +67,8 @@ zip: sync
 		-x "*/pytest.ini" \
 		-x "*/.pytest_cache/*" \
 		-x "*/scripts/run_tests.sh" \
+		-x "*/scripts/run_qgis_checks.sh" \
+		-x "*/pyproject.toml" \
 		-x "*/scripts/setup_libegl.sh"
 	@ls -la "$(ZIP_PATH)"
 	@echo "OK: $(ZIP_PATH)"

@@ -40,7 +40,7 @@ from .model import (
     LayerNode,
     LayerOrderModel,
 )
-from .tree_widget import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
+from .tree_model import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
 from .undo import TreeStateCommand
 from .view import LayerOrderView
 

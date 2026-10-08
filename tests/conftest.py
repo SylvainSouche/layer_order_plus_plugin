@@ -81,7 +81,7 @@ def _install_qgis_stubs():
     qgis_core.QgsProject = _QgsProject
 
     # Other classes referenced in imports — they won't be exercised in tests
-    # that focus on tree_utils, but they need to exist for module import.
+    # that don't touch them, but they need to exist for module import.
     class _QgsApplication:
         @staticmethod
         def getThemeIcon(name):
@@ -210,14 +210,3 @@ def qapp():
     if app is None:
         app = QApplication([])
     return app
-
-
-@pytest.fixture
-def tree(qapp):
-    """Provide a fresh LayerOrderTree (QTreeWidget subclass)."""
-    # Import after stubs are installed
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from layer_order_plus_qgis4.tree_widget import LayerOrderTree
-    t = LayerOrderTree()
-    yield t
-    t.deleteLater()

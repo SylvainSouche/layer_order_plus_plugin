@@ -7,12 +7,19 @@ check that the View never acts on its own input.
 import types
 
 import pytest
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QMimeData, QModelIndex, QPoint, Qt
 from PyQt6.QtTest import QTest
 
 from layer_order_plus_qgis4.model import GroupNode, LayerNode, LayerOrderModel
-from layer_order_plus_qgis4.tree_utils import ROLE_ID, ROLE_TYPE, TYPE_GROUP, find_group_item, find_layer_item
-from layer_order_plus_qgis4.tree_widget import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
+from layer_order_plus_qgis4.tree_model import (
+    DROP_ABOVE,
+    DROP_BELOW,
+    DROP_END,
+    DROP_ON,
+    MIME_IDS,
+    ROLE_ID,
+    ROLE_TYPE,
+)
 
 # ---------- helpers ----------
 
@@ -33,12 +40,24 @@ def _model_shape(nodes):
             for n in nodes]
 
 
-def _view_shape(tree):
-    def walk(it):
-        if it.data(0, ROLE_TYPE) == TYPE_GROUP:
-            return (it.data(0, ROLE_ID), [walk(it.child(i)) for i in range(it.childCount())])
-        return it.data(0, ROLE_ID)
-    return [walk(tree.topLevelItem(i)) for i in range(tree.topLevelItemCount())]
+def _view_shape(view):
+    m = view.item_model
+
+    def walk(parent):
+        out = []
+        for row in range(m.rowCount(parent)):
+            ix = m.index(row, 0, parent)
+            out.append((ix.data(ROLE_ID), walk(ix)) if ix.data(ROLE_TYPE) == "group" else ix.data(ROLE_ID))
+        return out
+    return walk(QModelIndex())
+
+
+def _check(view, item_id):
+    return view.item_model.index_of(item_id).data(Qt.ItemDataRole.CheckStateRole)
+
+
+def _expanded(view, group_id):
+    return view.tree.isExpanded(view.item_model.index_of(group_id))
 
 
 @pytest.fixture
@@ -60,7 +79,7 @@ def mvc(qapp):
     def drop(moving, target, pos):
         vc.handle_drop(list(moving), target, pos)
         shape = _model_shape(model.get_root())
-        assert _view_shape(view.tree) == shape, "View diverged from Model"
+        assert _view_shape(view) == shape, "View diverged from Model"
         return shape
 
     yield types.SimpleNamespace(view=view, model=model, vc=vc, load=load, drop=drop,
@@ -174,9 +193,9 @@ def test_drop_is_one_undo_step(mvc):
     assert mvc.vc.undo_stack.count() == 1
     mvc.vc.undo_stack.undo()
     assert _model_shape(mvc.model.get_root()) == ["A", "B", "C", "D"]
-    assert _view_shape(mvc.view.tree) == ["A", "B", "C", "D"]
+    assert _view_shape(mvc.view) == ["A", "B", "C", "D"]
     mvc.vc.undo_stack.redo()
-    assert _view_shape(mvc.view.tree) == _model_shape(mvc.model.get_root())
+    assert _view_shape(mvc.view) == _model_shape(mvc.model.get_root())
 
 
 def test_drop_reselects_moved_items(mvc):
@@ -209,7 +228,7 @@ def test_undo_keeps_current_visibility(mvc):
     mvc.model.set_visibility("A", False)       # QGIS hides A
     mvc.vc.undo_stack.undo()
     assert mvc.model.find_item("A").visible is False
-    assert find_layer_item(mvc.view.tree, "A").checkState(0) == Qt.CheckState.Unchecked
+    assert _check(mvc.view, "A") == Qt.CheckState.Unchecked
 
 
 # ---------- intents that are not Model edits ----------
@@ -219,24 +238,24 @@ def test_check_intent_requests_visibility_for_group_layers(mvc):
     mvc.view.check_requested.emit("g1", False)
     assert mvc.requests == [("visibility", ["A", "B"], False)]
     # Nothing changes until QGIS answers through the Model
-    assert find_layer_item(mvc.view.tree, "A").checkState(0) == Qt.CheckState.Checked
+    assert _check(mvc.view, "A") == Qt.CheckState.Checked
 
 
 def test_visibility_rendered_with_group_state(mvc):
     mvc.load([("g1", ["A", "B"])])
     mvc.model.set_visibility("A", False)
-    assert find_group_item(mvc.view.tree, "g1").checkState(0) == Qt.CheckState.PartiallyChecked
+    assert _check(mvc.view, "g1") == Qt.CheckState.PartiallyChecked
     mvc.model.set_visibility("B", False)
-    assert find_group_item(mvc.view.tree, "g1").checkState(0) == Qt.CheckState.Unchecked
+    assert _check(mvc.view, "g1") == Qt.CheckState.Unchecked
 
 
 def test_expand_intent_goes_through_model(mvc):
     mvc.load([("g1", ["A"]), "B", "C"])
     mvc.view.tree.expand_intent.emit("g1", False)
     assert mvc.model.find_item("g1").expanded is False
-    assert find_group_item(mvc.view.tree, "g1").isExpanded() is False
+    assert not _expanded(mvc.view, "g1")
     mvc.drop(["C"], "B", DROP_ABOVE)           # re-render keeps it collapsed
-    assert find_group_item(mvc.view.tree, "g1").isExpanded() is False
+    assert not _expanded(mvc.view, "g1")
 
 
 def test_control_click_only_requests(mvc):
@@ -264,21 +283,20 @@ def _show(mvc):
 
 
 def test_checkbox_click_does_not_toggle_item(mvc):
+    from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
     mvc.load(["A", "B"])
     _show(mvc)
-    tree = mvc.view.tree
-    item = find_layer_item(tree, "A")
+    tree, index = mvc.view.tree, mvc.view.item_model.index_of("A")
     seen = []
-    tree.check_intent.connect(lambda i, on: seen.append((i, on)))
-    from PyQt6.QtWidgets import QStyle, QStyleOptionViewItem
+    mvc.view.item_model.check_intent.connect(lambda i, on: seen.append((i, on)))
     opt = QStyleOptionViewItem()
-    index = tree.indexFromItem(item)
-    tree.itemDelegate().initStyleOption(opt, index)
+    tree.initViewItemOption(opt)
+    QStyledItemDelegate().initStyleOption(opt, index)   # Python-created: protected API allowed
     opt.rect = tree.visualRect(index)
     box = tree.style().subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, tree)
     QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=box.center())
     assert seen == [("A", False)]
-    assert item.checkState(0) == Qt.CheckState.Checked
+    assert _check(mvc.view, "A") == Qt.CheckState.Checked
 
 
 def test_branch_click_does_not_expand(mvc):
@@ -289,17 +307,66 @@ def test_branch_click_does_not_expand(mvc):
     seen = []
     tree.expand_intent.disconnect()            # observe the intent only, nobody acts on it
     tree.expand_intent.connect(lambda g, on: seen.append((g, on)))
-    item = find_group_item(tree, "g1")
-    rect = tree.visualItemRect(item)
+    rect = tree.visualRect(mvc.view.item_model.index_of("g1"))
     QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton,
                      pos=QPoint(rect.left() - tree.indentation() // 2, rect.center().y()))
     assert seen == [("g1", True)]
-    assert item.isExpanded() is False
+    assert not _expanded(mvc.view, "g1")
 
 
-def test_moving_items_display_order_and_no_nested(mvc):
+def test_selected_ids_display_order_and_no_nested(mvc):
     mvc.load([("g1", ["A", "B"]), "C"])
-    tree = mvc.view.tree
-    for it in (find_layer_item(tree, "C"), find_layer_item(tree, "A"), find_group_item(tree, "g1")):
-        it.setSelected(True)
+    mvc.view.render_selection(["C", "A", "g1"])
     assert mvc.view.selected_ids() == ["g1", "C"]
+
+
+# ---------- item model: Qt drop → intent ----------
+
+def _mime(ids):
+    import json
+    m = QMimeData()
+    m.setData(MIME_IDS, json.dumps(ids).encode())
+    return m
+
+
+@pytest.fixture
+def item_model(mvc):
+    mvc.load(["X", ("g1", ["A", "B", "C"]), "Y"])
+    seen = []
+    mvc.view.drop_requested.disconnect()       # observe only
+    mvc.view.item_model.drop_intent.connect(lambda *a: seen.append(a))
+    return mvc.view.item_model, seen
+
+
+@pytest.mark.parametrize("row, parent, moving, expected", [
+    (-1, "g1", ["Y"], ("g1", DROP_ON)),          # onto a group
+    (-1, "A", ["Y"], ("A", DROP_ON)),            # onto a layer
+    (0, "g1", ["Y"], ("A", DROP_ABOVE)),         # first row of a group
+    (3, "g1", ["Y"], ("C", DROP_BELOW)),         # after the last child
+    (1, "g1", ["B"], ("C", DROP_ABOVE)),         # next to itself → next non-mover
+    (-1, None, ["A"], ("", DROP_END)),           # empty area
+    (3, None, ["A"], ("Y", DROP_BELOW)),         # after the last top-level row
+])
+def test_drop_translation(item_model, row, parent, moving, expected):
+    m, seen = item_model
+    parent_ix = m.index_of(parent) if parent else QModelIndex()
+    assert m.dropMimeData(_mime(moving), Qt.DropAction.MoveAction, row, 0, parent_ix) is False
+    assert seen == [(moving, *expected)]
+
+
+def test_drop_into_own_subtree_refused(item_model):
+    m, seen = item_model
+    assert not m.canDropMimeData(_mime(["g1"]), Qt.DropAction.MoveAction, 0, 0, m.index_of("A"))
+    assert not m.dropMimeData(_mime(["g1"]), Qt.DropAction.MoveAction, -1, 0, m.index_of("g1"))
+    assert seen == []
+
+
+def test_render_keeps_selection_and_expansion(mvc):
+    mvc.load(["A", ("g1", ["B"]), "C"])
+    mvc.view.render_selection(["B"])
+    mvc.drop(["C"], "A", DROP_ABOVE)           # same items, new arrangement
+    assert mvc.view.selected_ids() == ["C"]    # the ViewController selects moved items
+    mvc.view.render_selection(["B"])
+    mvc.model.rename_layer("A", "renamed")     # display-only change
+    assert mvc.view.selected_ids() == ["B"]
+    assert mvc.view.item_model.index_of("A").data() == "renamed"
