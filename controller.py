@@ -58,7 +58,7 @@ class LayerOrderController(QObject):
         # Apply state machine
         self._apply_suspended = True
         self._in_reconcile = False  # guard against reconcile feedback loop
-        self._apply_counter = 0    # counter: our own setCustomLayerOrder triggers customLayerOrderChanged
+        self._applying = False     # True while WE write to QGIS (its signals fire synchronously)
         self._in_layer_add_remove = False  # guard: layer add/remove triggers order changes
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
@@ -147,6 +147,8 @@ class LayerOrderController(QObject):
         shows a different order than Plus.
         """
         self._sync_control_from_project()
+        if self._applying:
+            return  # our own setHasCustomLayerOrder(True) inside _apply_custom_order
         root = QgsProject.instance().layerTreeRoot()
         if root.hasCustomLayerOrder():
             our_order_ids = self._vc.get_flattened_layer_ids()
@@ -167,9 +169,13 @@ class LayerOrderController(QObject):
         Guards:
         - Skip if we're already reconciling (prevents feedback loop).
         - Skip if we're applying (our own _apply_custom_order triggers this
-          signal — we must not reconcile our own changes). Uses a counter
-          instead of a timer — the counter is incremented before
-          setCustomLayerOrder and the signal handler decrements it.
+          signal synchronously — we must not reconcile our own changes).
+          A counter was used before, but QGIS doesn't emit the signal when
+          the order is unchanged, so the counter leaked and later swallowed
+          genuine external changes.
+        - Skip if a Plus change is still waiting to be applied (debounce
+          timer active): QGIS's order is stale and reconciling would revert
+          the user's drag.
         - Skip if layers are being added/removed.
         - Skip if the layer SETS differ (add/remove, not reorder).
         """
@@ -177,9 +183,11 @@ class LayerOrderController(QObject):
             return
         if self._in_reconcile:
             return
-        if self._apply_counter > 0:
-            _log("[C] _on_custom_order_changed: skipped (our own apply)")
-            self._apply_counter -= 1
+        if self._applying:
+            _vlog("[C] _on_custom_order_changed: skipped (our own apply)")
+            return
+        if self._apply_timer.isActive():
+            _vlog("[C] _on_custom_order_changed: skipped (Plus change pending)")
             return
         if self._in_layer_add_remove:
             return
@@ -239,13 +247,17 @@ class LayerOrderController(QObject):
         _log(f"[C] _reconcile: qgis_order={qgis_order}")
         _log(f"[C] _reconcile: before, our_order={self._vc.get_flattened_layer_ids()}")
 
-        # Collect group metadata (id → (name, expanded)) for preservation
+        # Collect group metadata (id → (name, expanded)) and layer visibility
+        # for preservation
         group_meta = {}
+        visibility = {}
         def collect_meta(node):
             if isinstance(node, GroupNode):
                 group_meta[node.id] = (node.name, node.expanded)
                 for ch in node.children:
                     collect_meta(ch)
+            else:
+                visibility[node.id] = node.visible
         for top in model.get_root():
             collect_meta(top)
 
@@ -262,9 +274,15 @@ class LayerOrderController(QObject):
             model.get_root(), group_meta, layer_names
         )
 
-        with model.block_notifications():
-            model._root = new_root
-        self._vc._rebuild_view_from_model()
+        def restore_visibility(nodes):
+            for n in nodes:
+                if isinstance(n, GroupNode):
+                    restore_visibility(n.children)
+                else:
+                    n.visible = visibility.get(n.id, True)
+        restore_visibility(new_root)
+
+        self._vc.replace_root_from_external(new_root)
         _log(f"[C] _reconcile: after, our_order={self._vc.get_flattened_layer_ids()}")
 
     def _rebuild_level(self, qgis_order, start, end, current_children,
@@ -365,96 +383,6 @@ class LayerOrderController(QObject):
                 i = group_end
 
         return result
-
-    def _find_conflicting_groups(self, qgis_order):
-        """Return list of group_ids whose layers are NOT contiguous in qgis_order.
-
-        A group is "contiguous" if all its descendant layers appear as a
-        contiguous block in qgis_order (no outside layers interleaved).
-        Non-contiguous groups must be deleted to honour the QGIS order.
-        """
-        _vlog_method("_find_conflicting_groups", "[C]")
-        from .model import GroupNode, LayerNode
-        model = self._vc._model
-        conflicting = []
-
-        def collect_layer_ids(node):
-            ids = []
-            if isinstance(node, LayerNode):
-                ids.append(node.id)
-            elif isinstance(node, GroupNode):
-                for ch in node.children:
-                    ids.extend(collect_layer_ids(ch))
-            return ids
-
-        def walk_groups(node):
-            if isinstance(node, GroupNode):
-                group_layer_ids = collect_layer_ids(node)
-                if group_layer_ids:
-                    positions = [qgis_order.index(lid) for lid in group_layer_ids
-                                 if lid in qgis_order]
-                    if positions:
-                        is_contiguous = (max(positions) - min(positions) + 1 == len(positions))
-                        _log(f"  group '{node.name}': layers at positions {positions} "
-                             f"→ {'contiguous' if is_contiguous else 'NON-CONTIGUOUS (conflicting)'}")
-                        if not is_contiguous:
-                            conflicting.append(node.id)
-                for ch in node.children:
-                    walk_groups(ch)
-
-        for top in model.get_root():
-            walk_groups(top)
-        return conflicting
-
-    def _reorder_all_levels_to_match_qgis(self, qgis_order):
-        """Reorder ALL levels of the Model tree to match QGIS's flat order.
-
-        For each node (top-level or within a group), sort its direct children
-        by the minimum qgis_order position of any descendant layer. This
-        handles:
-        - Top-level group/layer reordering
-        - Within-group layer reordering (when layers are swapped in native)
-        - Nested group reordering
-
-        Groups that have no layers in qgis_order are kept at their current
-        relative position (appended at the end).
-        """
-        _vlog_method("_reorder_all_levels_to_match_qgis", "[C]")
-        from .model import GroupNode, LayerNode
-        model = self._vc._model
-
-        # Build mapping: layer_id → position in qgis_order
-        layer_pos = {}
-        for i, lid in enumerate(qgis_order):
-            layer_pos[lid] = i
-
-        def min_descendant_position(node):
-            """Return the minimum qgis_order position of any descendant layer."""
-            if isinstance(node, LayerNode):
-                return layer_pos.get(node.id, 999999)
-            if isinstance(node, GroupNode):
-                positions = [min_descendant_position(ch) for ch in node.children]
-                return min(positions) if positions else 999999
-            return 999999
-
-        def reorder_children(parent_children):
-            """Sort a list of children by their min descendant qgis_order position."""
-            # Sort by min position; items with no layers stay at the end (stable)
-            parent_children.sort(key=lambda n: min_descendant_position(n))
-
-        def reorder_recursive(node):
-            if isinstance(node, GroupNode):
-                reorder_children(node.children)
-                for ch in node.children:
-                    reorder_recursive(ch)
-
-        with model.block_notifications():
-            # Reorder top-level
-            reorder_children(model._root)
-            # Recurse into groups
-            for top in model._root:
-                reorder_recursive(top)
-        self._vc._rebuild_view_from_model()
 
     def _on_tree_visibility_changed(self, node):
         _vlog_method("_on_tree_visibility_changed", "[C]")
@@ -725,11 +653,13 @@ class LayerOrderController(QObject):
 
     def _apply_custom_order(self):
         _vlog_method("_apply_custom_order", "[C]")
-        # Increment the counter BEFORE setCustomLayerOrder so that
-        # _on_custom_order_changed knows this order change came from us.
-        # The counter is decremented when the signal fires (synchronously
-        # or queued). This is more reliable than a timer-based guard.
-        self._apply_counter += 1
+        # QGIS emits hasCustomLayerOrderChanged / customLayerOrderChanged
+        # synchronously from the setters below; _applying tells our own
+        # handlers to ignore them.
+        if self._applying:
+            return
+        self._apply_timer.stop()
+        self._applying = True
         try:
             root = QgsProject.instance().layerTreeRoot()
             if not self._view.is_control_enabled():
@@ -759,6 +689,8 @@ class LayerOrderController(QObject):
         except Exception as e:
             _log(f"[C] _apply_custom_order FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
+        finally:
+            self._applying = False
 
     # ==================================================================
     # External control (plugin.py calls these during project load)

@@ -79,7 +79,7 @@ class LayerOrderView(QDockWidget):
     verbose_toggled = pyqtSignal(bool)
     layer_visibility_toggled = pyqtSignal(str, bool)  # layer_id, checked
     group_visibility_toggled = pyqtSignal(str, bool)  # group_id, checked (propagate to all child layers)
-    item_double_clicked = pyqtSignal(str)             # item_id (group only — toggle expand)
+    expanded_changed = pyqtSignal(str, bool)          # group_id, expanded (user clicked arrow / double-clicked)
     # drop_intent(moving_ids, target_id, position) — from BetterLayerTree
     drop_intent = pyqtSignal(list, str, str)
     # Local dock shortcuts (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z) — re-emitted so
@@ -138,9 +138,10 @@ class LayerOrderView(QDockWidget):
             "Drag layers and groups to set draw order (top of tree = drawn on top).\n\n"
             "Drop rules:\n"
             "  • Drop ON a layer → creates a new group containing the target layer and the dropped items\n"
-            "  • Drop ON a group → moves the dropped items into that group (top)\n"
+            "  • Drop ON a group → moves the dropped items to the end of that group\n"
             "  • Drop ABOVE an item → reorders just above that item\n"
-            "  • Drop BELOW an item → reorders just below that item\n\n"
+            "  • Drop BELOW an item → reorders just below that item\n"
+            "  • Drop in the empty area → moves to the bottom of the list\n\n"
             "Right-click for: Create / Rename / Delete group, Expand / Collapse, Move to top / bottom.\n"
             "Double-click a group to expand or collapse it."
         )
@@ -206,7 +207,11 @@ class LayerOrderView(QDockWidget):
         self.chk_remove_empty.toggled.connect(self._on_remove_empty_toggled)
         self.chk_verbose.toggled.connect(self._on_verbose_toggled)
         self.ed_filter.textChanged.connect(self.filter_changed.emit)
-        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        # Qt toggles expansion itself (arrow click, double-click); we only
+        # report the new state so the Model stays in sync. Routing
+        # double-click through the Model as well toggled twice.
+        self.tree.itemExpanded.connect(lambda it: self._on_item_expanded(it, True))
+        self.tree.itemCollapsed.connect(lambda it: self._on_item_expanded(it, False))
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemChanged.connect(self._on_item_changed)
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
@@ -235,12 +240,12 @@ class LayerOrderView(QDockWidget):
         set_verbose(bool(checked))
         _log(f"Verbose logging {'ON' if checked else 'OFF'}")
 
-    def _on_item_double_clicked(self, item, column):
-        _vlog_method("_on_item_double_clicked", "[V]")
+    def _on_item_expanded(self, item, expanded):
+        _vlog_method("_on_item_expanded", "[V]")
         if self._syncing or item is None:
             return
         if item.data(0, ROLE_TYPE) == TYPE_GROUP:
-            self.item_double_clicked.emit(item.data(0, ROLE_ID))
+            self.expanded_changed.emit(item.data(0, ROLE_ID), expanded)
 
     def _on_item_changed(self, item, column):
         _vlog_method("_on_item_changed", "[V]")
@@ -260,11 +265,15 @@ class LayerOrderView(QDockWidget):
             checked = item.checkState(0) == Qt.CheckState.Checked
             self.layer_visibility_toggled.emit(lid, checked)
         elif t == TYPE_GROUP:
-            gid = item.data(0, ROLE_ID)
-            # PartiallyChecked → treat as Checked (cycle forward)
+            # With ItemIsAutoTristate, toggling one child makes Qt emit
+            # itemChanged for the parent group too. A PartiallyChecked group
+            # is that echo, not a user action — propagating it would re-check
+            # every sibling of the layer the user just unchecked.
             state = item.checkState(0)
-            checked = state != Qt.CheckState.Unchecked
-            self.group_visibility_toggled.emit(gid, checked)
+            if state == Qt.CheckState.PartiallyChecked:
+                return
+            self.group_visibility_toggled.emit(item.data(0, ROLE_ID),
+                                               state == Qt.CheckState.Checked)
 
     def _on_context_menu(self, pos):
         _vlog_method("_on_context_menu", "[V]")
@@ -429,6 +438,7 @@ class LayerOrderView(QDockWidget):
         """
         self._syncing = True
         self.tree.blockSignals(True)
+        scroll = self.tree.verticalScrollBar().value()
         try:
             self.tree.clear()
             expand_targets = []
@@ -442,6 +452,10 @@ class LayerOrderView(QDockWidget):
                         it.setExpanded(expanded)
                     except RuntimeError:
                         pass
+            # A rebuild after every drop must not jump the list back to the top
+            # (lay out first so the scrollbar range is up to date)
+            self.tree.doItemsLayout()
+            self.tree.verticalScrollBar().setValue(scroll)
         finally:
             self.tree.blockSignals(False)
             self._syncing = False

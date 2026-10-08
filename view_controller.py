@@ -16,6 +16,7 @@ the Controller) to pass layer icons to the View when building layer items.
 """
 import json
 import traceback
+from contextlib import contextmanager
 
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QUndoStack
@@ -41,7 +42,7 @@ from .model import (
     TREE_JSON_SCHEMA_VERSION,
 )
 from .tree_utils import TYPE_GROUP, TYPE_LAYER
-from .tree_widget import DROP_ON, DROP_ABOVE, DROP_BELOW
+from .tree_widget import DROP_ON, DROP_ABOVE, DROP_BELOW, DROP_END
 from .undo import TreeStateCommand
 from .view import LayerOrderView
 
@@ -110,7 +111,7 @@ class ViewController(QObject):
         v.remove_empty_toggled.connect(self._on_remove_empty_toggled)
         v.layer_visibility_toggled.connect(self._on_layer_visibility_toggled)
         v.group_visibility_toggled.connect(self._on_group_visibility_toggled)
-        v.item_double_clicked.connect(self._on_item_double_clicked)
+        v.expanded_changed.connect(self._on_expanded_changed)
         v.drop_intent.connect(self._on_drop_intent)
 
     # ==================================================================
@@ -183,6 +184,27 @@ class ViewController(QObject):
             }
         return [ser_node(n) for n in self._model.get_root()]
 
+    @contextmanager
+    def _user_edit(self, text: str):
+        """Run a user action as ONE Model transaction.
+
+        Model events are suppressed for the duration (the trailing coalesced
+        ORDER_CHANGED still reaches the Controller), then the View is rebuilt
+        once from the Model, and a single undo entry is pushed. This keeps
+        the View a pure projection of the Model: no incremental View patching
+        in the middle of a multi-step mutation.
+        """
+        before = self._model.serialize()
+        try:
+            with self._model.block_notifications():
+                yield
+        finally:
+            after = self._model.serialize()
+            if after != before:
+                self._rebuild_view_from_model()
+                self._push_undo(before, after, text)
+                self._autosave()
+
     # ==================================================================
     # View signal handlers → Model mutations
     # ==================================================================
@@ -200,8 +222,7 @@ class ViewController(QObject):
             if name in self._view.get_all_group_names():
                 name = self._view.get_unique_group_name(name)
 
-            before = self._model.serialize()
-            selected_ids = self._view.get_selected_item_ids()
+            selected_ids = self._in_tree_order(self._view.get_selected_item_ids())
 
             # Determine where to create the new group.
             # If multiple items are selected, the new group should be a SIBLING
@@ -213,20 +234,13 @@ class ViewController(QObject):
             else:
                 parent_id, index = self._view.resolve_anchor_for_insertion()
 
-            gid = self._model.create_group(name, parent_id=parent_id, index=index)
-
-            # Move selected items into the new group, preserving order.
-            insert_index = 0
-            for item_id in selected_ids:
-                self._model.move_item(item_id, gid, insert_index)
-                insert_index += 1
-
+            with self._user_edit("Create group"):
+                gid = self._model.create_group(name, parent_id=parent_id, index=index)
+                # Move selected items into the new group, preserving display order
+                if selected_ids:
+                    self._model.move_items(selected_ids, gid)
+                self._model.set_expanded(gid, True)
             self._view.expand_and_select_item(gid)
-            self._model.set_expanded(gid, True)
-
-            after = self._model.serialize()
-            self._push_undo(before, after, "Create group")
-            self._autosave()
         except Exception as e:
             _log(f"_on_create_group FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
@@ -285,11 +299,8 @@ class ViewController(QObject):
             others = self._view.get_all_group_names() - {current}
             if name in others:
                 name = self._view.get_unique_group_name(name)
-            before = self._model.serialize()
-            self._model.rename_group(gid, name)
-            after = self._model.serialize()
-            self._push_undo(before, after, "Rename group")
-            self._autosave()
+            with self._user_edit("Rename group"):
+                self._model.rename_group(gid, name)
         except Exception as e:
             _log(f"_on_rename_group FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
@@ -302,18 +313,12 @@ class ViewController(QObject):
             group_ids = self._view.get_selected_group_ids()
             if not group_ids:
                 return
-            before = self._model.serialize()
             # Delete deepest first (sort by depth descending)
             group_ids.sort(key=lambda gid: self._view.get_item_depth(gid), reverse=True)
-            removed = 0
-            for gid in group_ids:
-                self._model.delete_group(gid, unwrap_children=True)
-                removed += 1
-            if removed == 0:
-                return
-            after = self._model.serialize()
-            self._push_undo(before, after, "Delete group" if removed == 1 else f"Delete {removed} groups")
-            self._autosave()
+            n = len(group_ids)
+            with self._user_edit("Delete group" if n == 1 else f"Delete {n} groups"):
+                for gid in group_ids:
+                    self._model.delete_group(gid, unwrap_children=True)
         except Exception as e:
             _log(f"_on_delete_groups FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
@@ -326,12 +331,9 @@ class ViewController(QObject):
             item_ids = self._view.get_selected_item_ids()
             if not item_ids:
                 return
-            before = self._model.serialize()
-            self._model.move_items_to_boundary(item_ids, to_top=to_top)
-            after = self._model.serialize()
-            if before != after:
-                self._push_undo(before, after, "Move to top" if to_top else "Move to bottom")
-                self._autosave()
+            with self._user_edit("Move to top" if to_top else "Move to bottom"):
+                self._model.move_items_to_boundary(item_ids, to_top=to_top)
+            self._view.select_items(item_ids)
         except Exception as e:
             _log(f"_on_move_to_boundary FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
@@ -395,12 +397,14 @@ class ViewController(QObject):
         for lid in layer_ids:
             self._model.set_visibility(lid, checked)
 
-    def _on_item_double_clicked(self, group_id):
-        _vlog_method("_on_item_double_clicked", "[VC]")
-        """User double-clicked a group → toggle expanded state in Model."""
-        node = self._model.find_item(group_id)
-        if isinstance(node, GroupNode):
-            self._model.set_expanded(group_id, not node.expanded)
+    def _on_expanded_changed(self, group_id, expanded):
+        _vlog_method("_on_expanded_changed", "[VC]")
+        """User expanded/collapsed a group in the View → record it in the Model.
+
+        Without this the Model keeps a stale `expanded` flag and every
+        rebuild (i.e. every drop) re-opens or re-closes groups.
+        """
+        self._model.set_expanded(group_id, expanded)
 
     def _on_drop_intent(self, moving_ids, target_id, position):
         _vlog_method("_on_drop_intent", "[VC]")
@@ -424,77 +428,73 @@ class ViewController(QObject):
 
     def _handle_drop_intent(self, moving_ids, target_id, position):
         _vlog_method("_handle_drop_intent", "[VC]")
-        """Actual drop handling — runs on next event loop iteration."""
+        """Actual drop handling — runs on next event loop iteration.
+
+        Every case is a single atomic Model.move_items() call anchored on a
+        sibling id (not an index), so multi-item drops can't be thrown off
+        by indices shifting while the movers are taken out.
+        """
         if self._in_undo:
             return
         try:
-            before = self._model.serialize()
-            target = self._model.find_item(target_id)
-            if target is None:
-                _log(f"[VC] _handle_drop_intent: target {target_id} not found in Model")
+            movers = self._in_tree_order(moving_ids)
+            if not movers:
                 return
-            _log(f"[VC] _handle_drop_intent: moving={moving_ids} target={target_id} "
-                 f"({type(target).__name__}) pos={position}")
+            _log(f"[VC] _handle_drop_intent: moving={movers} target={target_id} pos={position}")
 
-            if position == DROP_ON and isinstance(target, LayerNode):
-                # Drop ON a layer → create new group with target + movers
-                parent = self._model.find_parent(target_id)
-                parent_id = parent.id if parent is not None else None
-                target_index = self._model.get_index_in_parent(target_id)
-                gid = self._model.create_group("New group", parent_id=parent_id,
-                                               index=target_index)
-                # Move target into the new group first (index 0)
-                self._model.move_item(target_id, gid, 0)
-                # Then move each dropped item after the target, incrementing
-                # the index so order is preserved: [target, mover1, mover2, ...]
-                insert_index = 1
-                for item_id in moving_ids:
-                    self._model.move_item(item_id, gid, insert_index)
-                    insert_index += 1
-                self._model.set_expanded(gid, True)
-                self._view.expand_and_select_item(gid)
-            elif position == DROP_ON and isinstance(target, GroupNode):
-                # Drop ON a group → move items into the group.
-                # Insert at the END of the group (append), preserving order.
-                # This matches the user's expectation: dropping on ABCD
-                # places the item after all existing children.
-                target_children = target.children if hasattr(target, 'children') else []
-                insert_index = len(target_children)
-                for item_id in moving_ids:
-                    self._model.move_item(item_id, target_id, insert_index)
-                    insert_index += 1
-            elif position == DROP_ABOVE:
-                # Drop ABOVE → move to target's parent at target's index.
-                # Move in reverse order so first mover ends up on top
-                # (each insert pushes the previous one down).
-                parent = self._model.find_parent(target_id)
-                parent_id = parent.id if parent is not None else None
-                target_index = self._model.get_index_in_parent(target_id)
-                if target_index is not None:
-                    for item_id in reversed(moving_ids):
-                        self._model.move_item(item_id, parent_id, target_index)
-            elif position == DROP_BELOW:
-                # Drop BELOW → move to target's parent at target's index + 1.
-                # Move in forward order, incrementing index for each item.
-                parent = self._model.find_parent(target_id)
-                parent_id = parent.id if parent is not None else None
-                target_index = self._model.get_index_in_parent(target_id)
-                if target_index is not None:
-                    insert_index = target_index + 1
-                    for item_id in moving_ids:
-                        self._model.move_item(item_id, parent_id, insert_index)
-                        insert_index += 1
+            if position == DROP_END:
+                with self._user_edit("Reorder layers"):
+                    self._model.move_items(movers, None, None)
+                self._view.select_items(movers)
+                return
 
-            # Re-select the moved items (rebuild after ITEM_MOVED loses selection)
-            self._view.select_items(moving_ids)
+            target = self._model.find_item(target_id)
+            if target is None or target_id in movers:
+                _log(f"[VC] _handle_drop_intent: invalid target {target_id}")
+                return
+            parent = self._model.find_parent(target_id)
+            parent_id = parent.id if parent is not None else None
 
-            after = self._model.serialize()
-            if before != after:
-                self._push_undo(before, after, "Reorder layers")
-                self._autosave()
+            with self._user_edit("Reorder layers"):
+                if position == DROP_ON and isinstance(target, LayerNode):
+                    # Drop ON a layer → new group at the target's slot holding
+                    # [target, movers...]
+                    gid = self._model.create_group(
+                        self._view.get_unique_group_name("New group"),
+                        parent_id=parent_id,
+                        index=self._model.get_index_in_parent(target_id))
+                    if self._model.move_items([target_id] + movers, gid):
+                        self._model.set_expanded(gid, True)
+                    else:
+                        self._model.delete_group(gid, unwrap_children=False)
+                elif position == DROP_ON:
+                    # Drop ON a group → append to the end of the group
+                    self._model.move_items(movers, target_id, None)
+                elif position == DROP_ABOVE:
+                    self._model.move_items(movers, parent_id, target_id)
+                elif position == DROP_BELOW:
+                    self._model.move_items(movers, parent_id,
+                                           self._next_sibling_id(target_id, set(movers)))
+
+            self._view.select_items(movers)
         except Exception as e:
-            _log(f"[VC] _on_drop_intent FAILED: {e!r}", Qgis.Critical)
+            _log(f"[VC] _handle_drop_intent FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
+
+    def _in_tree_order(self, item_ids):
+        """Return the known ids from `item_ids` sorted in display (pre-order) order."""
+        order = self._model.tree_order_key()
+        return sorted((i for i in dict.fromkeys(item_ids) if i in order), key=order.get)
+
+    def _next_sibling_id(self, item_id, exclude):
+        """Id of the first sibling after `item_id` not in `exclude`, or None (= end)."""
+        parent = self._model.find_parent(item_id)
+        siblings = parent.children if parent is not None else self._model.get_root()
+        idx = self._model.get_index_in_parent(item_id)
+        for sib in siblings[idx + 1:]:
+            if sib.id not in exclude:
+                return sib.id
+        return None
 
     # ==================================================================
     # Undo
@@ -543,6 +543,17 @@ class ViewController(QObject):
             self._model.load_from_json(raw_json)
         self._rebuild_view_from_model()
         self._snapshot = self._model.serialize()
+
+    def replace_root_from_external(self, new_root):
+        _vlog_method("replace_root_from_external", "[VC]")
+        """Swap in a tree computed outside Plus (reconcile with the stock
+        Layer Order panel). Not an undoable user action, but the View, the
+        snapshot and the saved project entry must all follow the Model."""
+        with self._model.block_notifications():
+            self._model._root = new_root
+        self._rebuild_view_from_model()
+        self._snapshot = self._model.serialize()
+        self._autosave()
 
     def serialize(self) -> str:
         """Return the current Model state as JSON."""
