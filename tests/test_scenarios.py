@@ -4,29 +4,13 @@ These tests exercise the Model + ViewController logic for complex grouping
 and layer-moving scenarios. They use the LayerOrderModel directly (Qt-free)
 plus a headless ViewController where needed.
 """
-import os
-import sys
 
-import pytest
-
-PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PLUGIN_ROOT not in sys.path:
-    sys.path.insert(0, PLUGIN_ROOT)
-
-# Stub the package so importing model.py doesn't trigger __init__.py → plugin.py → dock.py
-import types
-if "layer_order_plus_qgis4" not in sys.modules:
-    pkg = types.ModuleType("layer_order_plus_qgis4")
-    pkg.__path__ = [PLUGIN_ROOT]
-    sys.modules["layer_order_plus_qgis4"] = pkg
 
 from layer_order_plus_qgis4.model import (
-    LayerOrderModel,
     GroupNode,
     LayerNode,
-    new_group_id,
+    LayerOrderModel,
 )
-
 
 # ---------- helpers ----------
 
@@ -161,7 +145,6 @@ def test_reconcile_within_group_swap():
 
     Tests _reorder_all_levels_to_match_qgis logic at the Model level.
     """
-    from layer_order_plus_qgis4.controller import LayerOrderController
     # We can't easily test Controller without QGIS, but we can test the
     # reorder logic by simulating what _reorder_all_levels_to_match_qgis does.
     # For now, test that the Model's move_item handles within-group reorder.
@@ -376,7 +359,6 @@ def test_prune_empty_groups_keeps_non_empty():
 
 def test_serialize_round_trip_with_nested_groups():
     """(Outer(Inner(A, B), C)) → serialize → deserialize → same structure."""
-    import json
     model = _make_model_with_tree([
         ("group", "outer", "Outer", [
             ("group", "inner", "Inner", [("layer", "a", "A"), ("layer", "b", "B")]),

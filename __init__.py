@@ -1,3 +1,3 @@
 def classFactory(iface):
-    from .plugin import BetterLayerOrderPlugin
-    return BetterLayerOrderPlugin(iface)
+    from .plugin import LayerOrderPlusPlugin
+    return LayerOrderPlusPlugin(iface)

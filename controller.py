@@ -22,12 +22,11 @@ Requests (wired by plugin.py from the ViewController)
 Every QGIS signal we cause ourselves fires synchronously while
 ``_applying`` is set; that one flag is how our own echoes are recognised.
 """
-import traceback
+import logging
 
+from qgis.core import QgsLayerTree, QgsProject
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
-from qgis.core import Qgis, QgsLayerTree, QgsProject
 
-from .logger import _log, _vlog
 from .model import (
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_RENAMED,
@@ -39,6 +38,8 @@ from .model import (
     LayerOrderModel,
 )
 from .reconcile import reconcile_tree
+
+log = logging.getLogger("LayerOrderPlus.controller")
 
 ENTRY_SCOPE = "BetterLayerOrder"      # historical project-entry scope, kept for compatibility
 ENTRY_TREE = "tree_json"
@@ -170,8 +171,9 @@ class LayerOrderController(QObject):
                 model.set_control_enabled(root.hasCustomLayerOrder())
                 model.load_from_json(raw)
                 self._sync_layer_set()
-        except Exception as e:
-            _log(f"[C] load_project FAILED: {e!r}\n{traceback.format_exc()}", Qgis.Critical)
+        except Exception:
+            # A corrupt project entry must not take the plugin down
+            log.exception("loading the project's layer order failed")
         finally:
             self._loading = False
         self.project_loaded.emit()
@@ -332,9 +334,9 @@ class LayerOrderController(QObject):
         new_root = reconcile_tree(self._model.get_root(), qgis_order, dragged)
         if new_root is None:
             # Not a pure reorder (layers being added/removed): those paths handle it
-            _vlog("[C] reconcile skipped: QGIS order is not a permutation of Plus layers")
+            log.debug("reconcile skipped: QGIS order is not a permutation of Plus layers")
             return
-        _log(f"[C] reconciled with QGIS order (dragged: {sorted(dragged)})")
+        log.info("reconciled with the QGIS order (dragged: %s)", sorted(dragged))
         self._model.replace_root(new_root)
 
     def _apply_custom_order(self) -> None:
@@ -350,7 +352,7 @@ class LayerOrderController(QObject):
             root = proj.layerTreeRoot()
             root.setHasCustomLayerOrder(True)
             root.setCustomLayerOrder(layers)
-            _vlog(f"[C] applied {len(layers)} layer(s) to custom order")
+            log.debug("applied %d layer(s) to the custom order", len(layers))
         finally:
             self._applying = False
         self._iface.mapCanvas().refresh()

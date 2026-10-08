@@ -1,67 +1,55 @@
-"""Layer Order Plus — centralised logging.
+"""Logging for Layer Order Plus — the standard `logging` module.
 
-Provides:
-- _log(msg, level) — always logs to QgsMessageLog (LayerOrderPlus tab)
-- _vlog(msg) — verbose logging, only active when verbose mode is ON
-- set_verbose(enabled) — toggle verbose mode (wired by plugin.py to the View checkbox)
-- is_verbose() — query current state
+Every module logs to a child of the ``LayerOrderPlus`` logger
+(``logging.getLogger("LayerOrderPlus.<module>")``). Records go to the
+LayerOrderPlus tab of QGIS's Log Messages panel when QGIS is available,
+and to stderr otherwise (unit tests, scripts).
 
-Verbose mode is OFF by default. When ON, _vlog traces drops, model
-mutations and QGIS sync (tags: [M] Model, [VC] ViewController,
-[C] Controller, [TW] tree widget).
-
-The Model (Qt-free) uses _vlog too — it falls back to print() when
-QgsMessageLog isn't available (e.g., in unit tests).
+INFO and above are always shown; DEBUG ("verbose", toggled by the dock's
+checkbox) traces drops, Model mutations and QGIS sync.
 """
-import traceback as _traceback
-
-try:
-    from qgis.core import QgsMessageLog, Qgis
-    _HAS_QGIS = True
-except Exception:
-    _HAS_QGIS = False
+import logging
 
 LOG_TAG = "LayerOrderPlus"
-_verbose = False
+log = logging.getLogger(LOG_TAG)
+
+
+class _QgisMessageLogHandler(logging.Handler):
+    """Forward records to QgsMessageLog under the LayerOrderPlus tag."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        from qgis.core import Qgis, QgsMessageLog
+        if record.levelno >= logging.ERROR:
+            level = Qgis.Critical
+        elif record.levelno >= logging.WARNING:
+            level = Qgis.Warning
+        else:
+            level = Qgis.Info
+        QgsMessageLog.logMessage(self.format(record), LOG_TAG, level)
+
+
+def _install() -> None:
+    if log.handlers:
+        return  # module reloaded: keep the existing handler
+    try:
+        import qgis.core  # noqa: F401
+        handler: logging.Handler = _QgisMessageLogHandler()
+    except ImportError:
+        handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
 
 
 def set_verbose(enabled: bool) -> None:
-    """Toggle verbose logging (called by the View's checkbox)."""
-    global _verbose
-    _verbose = bool(enabled)
-    _log(f"Verbose logging {'ON' if _verbose else 'OFF'}")
+    """Show DEBUG records (True) or only INFO and above (False)."""
+    log.setLevel(logging.DEBUG if enabled else logging.INFO)
+    log.info("Verbose logging %s", "ON" if enabled else "OFF")
 
 
 def is_verbose() -> bool:
-    return _verbose
+    return log.isEnabledFor(logging.DEBUG)
 
 
-def _log(msg, level=None) -> None:
-    """Always log to QgsMessageLog (LayerOrderPlus tab)."""
-    if level is None:
-        level = Qgis.Info if _HAS_QGIS else 0
-    if _HAS_QGIS:
-        try:
-            QgsMessageLog.logMessage(str(msg), LOG_TAG, level)
-            return
-        except Exception:
-            pass
-    # Fallback (tests or very early load)
-    try:
-        print(f"[{LOG_TAG}] {msg}")
-    except Exception:
-        pass
-
-
-def _vlog(msg) -> None:
-    """Verbose log — only emits when verbose mode is ON."""
-    if not _verbose:
-        return
-    _log(msg)
-
-
-def _vlog_error(name: str, exc: Exception) -> None:
-    """Log an exception with full traceback."""
-    level = Qgis.Critical if _HAS_QGIS else 0
-    _log(f"{name} FAILED: {exc!r}", level)
-    _log(_traceback.format_exc(), level)
+_install()

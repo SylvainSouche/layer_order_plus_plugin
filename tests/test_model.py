@@ -5,41 +5,27 @@ verify every method, every event emission, and the feedback-loop guard
 (block_notifications).
 """
 import json
-import os
-import sys
 
 import pytest
 
-PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PLUGIN_ROOT not in sys.path:
-    sys.path.insert(0, PLUGIN_ROOT)
-
-# Stub the package so importing model.py doesn't trigger __init__.py → plugin.py → dock.py
-import types
-if "layer_order_plus_qgis4" not in sys.modules:
-    pkg = types.ModuleType("layer_order_plus_qgis4")
-    pkg.__path__ = [PLUGIN_ROOT]
-    sys.modules["layer_order_plus_qgis4"] = pkg
-
 from layer_order_plus_qgis4.model import (
-    LayerOrderModel,
-    GroupNode,
-    LayerNode,
-    new_group_id,
-    TREE_JSON_SCHEMA_VERSION,
-    EVENT_MODEL_LOADED,
-    EVENT_LAYER_ADDED,
-    EVENT_LAYER_REMOVED,
-    EVENT_LAYER_RENAMED,
+    EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_CREATED,
     EVENT_GROUP_DELETED,
     EVENT_GROUP_RENAMED,
     EVENT_ITEM_MOVED,
-    EVENT_VISIBILITY_CHANGED,
-    EVENT_EXPANDED_CHANGED,
+    EVENT_LAYER_ADDED,
+    EVENT_LAYER_REMOVED,
+    EVENT_LAYER_RENAMED,
+    EVENT_MODEL_LOADED,
     EVENT_ORDER_CHANGED,
+    EVENT_VISIBILITY_CHANGED,
+    TREE_JSON_SCHEMA_VERSION,
+    GroupNode,
+    LayerNode,
+    LayerOrderModel,
+    new_group_id,
 )
-
 
 # ---------- fixtures ----------
 
@@ -323,7 +309,6 @@ def test_create_group_at_index(model):
     model.add_layer("l1", "L1")
     model.add_layer("l2", "L2")
     model.create_group("Middle", index=1)
-    ids = [n.id if hasattr(n, "id") else "grp" for n in model.get_root()]
     # Root should be [l1, group, l2]
     assert len(model.get_root()) == 3
     assert isinstance(model.get_root()[1], GroupNode)
@@ -751,14 +736,16 @@ def test_set_remove_empty_groups_emits_setting_changed(model, captured_events):
 # ---------- listener registration ----------
 
 def test_add_listener_idempotent(model):
-    cb = lambda et, p: None
+    def cb(et, p):
+        pass
     model.add_listener(cb)
     model.add_listener(cb)  # second add should be no-op
     assert len(model._listeners) == 1
 
 
 def test_remove_listener(model):
-    cb = lambda et, p: None
+    def cb(et, p):
+        pass
     model.add_listener(cb)
     model.remove_listener(cb)
     assert len(model._listeners) == 0
@@ -803,7 +790,8 @@ def test_add_layer_beside(model):
 
 
 def test_load_from_json_tolerates_garbage(model):
-    model.load_from_json('{"children": [42, {"type": "layer"}, {"type": "group", "children": [{"type": "layer", "id": "x"}]}]}')
+    model.load_from_json('{"children": [42, {"type": "layer"}, '
+                         '{"type": "group", "children": [{"type": "layer", "id": "x"}]}]}')
     assert model.get_flattened_layer_ids() == ["x"]
     model.load_from_json("not json")
     assert model.get_root() == []
