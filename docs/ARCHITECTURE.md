@@ -84,9 +84,13 @@ step is recorded.
   checkbox) or a project load, the Controller re-sets the same order through
   an empty one so the panel shows what the map really uses.
 * **Stock Layer Order panel**: a drag there changes the order twice (layer
-  briefly listed twice, then removed from its old row). The Controller
-  reconciles once on the final order, using the duplicate as the hint of
-  which layer moved. Rules (`reconcile.py`):
+  briefly listed twice, then removed from its old row), inside the drag's
+  own event loop. The Controller handles every signal **synchronously, in
+  arrival order** — never deferred, since a timer could fire between the two
+  steps: a state with duplicates only records the dragged layer; the next
+  clean state is reconciled with that exact hint. With the hint, only the
+  dragged layer can change group (checked exhaustively in
+  `test_reconcile.py`). Rules (`reconcile.py`):
   * between two members of a group → joins that group;
   * on a group's edge → stays in its original group if possible, otherwise
     becomes a sibling;

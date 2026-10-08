@@ -7,9 +7,11 @@ module is pure Python (no Qt, no QGIS) so it can be unit-tested.
 Algorithm:
 
 1. Find which layers moved. The stock panel's intermediate signal (the
-   dragged layer is briefly present twice) gives an exact hint; otherwise
-   the layers outside a longest common subsequence of old/new order are
-   taken as moved.
+   dragged layer is briefly present twice) gives an exact hint. Without
+   it a move can be ambiguous (``E A B`` → ``A E B``: E moved down, or A
+   moved up), so each candidate is tried and the most plausible result
+   kept: fewest group-membership changes, then a layer landing strictly
+   between two members of a group rather than on a group's edge.
 2. Detach the moved layers. Every other layer ("anchor") kept its relative
    order, so every group is still contiguous and keeps its members.
 3. Re-insert each moved layer between its new flat neighbours. The places
@@ -66,11 +68,49 @@ def _lcs_ids(old: list, new: list) -> set:
     return keep
 
 
-def _pick_moved(old: list, new: list, hint: Iterable[str]) -> set:
+def _same_without(old: list, new: list, ids: set) -> bool:
+    return [x for x in old if x not in ids] == [x for x in new if x not in ids]
+
+
+def _moved_candidates(old: list, new: list, hint: Iterable[str]) -> list:
+    """Possible sets of moved layers, most likely first.
+
+    A valid drag hint is the answer. Otherwise a single-layer move is often
+    ambiguous (``E A B`` → ``A E B``: E moved down, or A moved up), so every
+    single layer that explains the change is a candidate; failing that, the
+    complement of a longest common subsequence.
+    """
     hint = set(hint or ()) & set(old)
-    if hint and [x for x in old if x not in hint] == [x for x in new if x not in hint]:
-        return hint
-    return set(old) - _lcs_ids(old, new)
+    if hint and _same_without(old, new, hint):
+        return [hint]
+    singles = [{x} for x in old if _same_without(old, new, {x})]
+    return singles or [set(old) - _lcs_ids(old, new)]
+
+
+def _parents(nodes, parent=None, out=None) -> dict:
+    """{layer id: parent group id or None}."""
+    out = {} if out is None else out
+    for n in nodes:
+        if isinstance(n, GroupNode):
+            _parents(n.children, n.id, out)
+        else:
+            out[n.id] = parent
+    return out
+
+
+def _score(old_root: list, new_root: list, moved: set) -> tuple:
+    """Lower is more plausible: fewest membership changes, then layers that
+    landed strictly between two members of a group (unambiguous) first."""
+    before, after = _parents(old_root), _parents(new_root)
+    changed = sum(before[lid] != after[lid] for lid in before)
+    tree = _Tree(new_root)
+    on_edge = 0
+    for lid in moved:
+        parent = tree.parent(lid)
+        siblings = tree.children_of(parent)
+        i = next(k for k, ch in enumerate(siblings) if ch.id == lid)
+        on_edge += parent is None or i == 0 or i == len(siblings) - 1
+    return changed, on_edge
 
 
 class _Tree:
@@ -132,8 +172,15 @@ def reconcile_tree(root: list, new_order: list, moved_hint: Iterable[str] = ()) 
     if new_order == old_order:
         return copy.deepcopy(root)
 
+    candidates = _moved_candidates(old_order, new_order, moved_hint)
+    results = [(_place_moved(root, new_order, moved), moved) for moved in candidates]
+    return min(results, key=lambda r: _score(root, r[0], r[1]))[0]
+
+
+def _place_moved(root: list, new_order: list, moved: set) -> list:
+    """Detach `moved` layers and re-insert them at their new flat positions."""
     tree = _Tree(copy.deepcopy(root))
-    moved = _pick_moved(old_order, new_order, moved_hint)
+    moved = set(moved)
 
     # Detach moved layers, remembering their original parent
     orig_parent = {}
