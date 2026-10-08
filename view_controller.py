@@ -431,7 +431,10 @@ class ViewController(QObject):
             before = self._model.serialize()
             target = self._model.find_item(target_id)
             if target is None:
+                _log(f"_handle_drop_intent: target {target_id} not found in Model")
                 return
+            _log(f"_handle_drop_intent: moving={moving_ids} target={target_id} "
+                 f"({type(target).__name__}) pos={position}")
 
             if position == DROP_ON and isinstance(target, LayerNode):
                 # Drop ON a layer → create new group with target + movers
@@ -451,32 +454,36 @@ class ViewController(QObject):
                 self._model.set_expanded(gid, True)
                 self._view.expand_and_select_item(gid)
             elif position == DROP_ON and isinstance(target, GroupNode):
-                # Drop ON a group → move items into top of group, preserving order.
-                # Insert at index 0, 1, 2, ... so first mover ends up on top.
-                insert_index = 0
+                # Drop ON a group → move items into the group.
+                # Insert at the END of the group (append), preserving order.
+                # This matches the user's expectation: dropping on ABCD
+                # places the item after all existing children.
+                target_children = target.children if hasattr(target, 'children') else []
+                insert_index = len(target_children)
                 for item_id in moving_ids:
                     self._model.move_item(item_id, target_id, insert_index)
                     insert_index += 1
             elif position == DROP_ABOVE:
-                # Drop ABOVE → move to target's parent at target's index,
-                # incrementing so order is preserved.
+                # Drop ABOVE → move to target's parent at target's index.
+                # Move in reverse order so first mover ends up on top
+                # (each insert pushes the previous one down).
                 parent = self._model.find_parent(target_id)
                 parent_id = parent.id if parent is not None else None
                 target_index = self._model.get_index_in_parent(target_id)
-                insert_index = target_index
-                for item_id in moving_ids:
-                    self._model.move_item(item_id, parent_id, insert_index)
-                    insert_index += 1
+                if target_index is not None:
+                    for item_id in reversed(moving_ids):
+                        self._model.move_item(item_id, parent_id, target_index)
             elif position == DROP_BELOW:
-                # Drop BELOW → move to target's parent at target's index + 1,
-                # incrementing so order is preserved.
+                # Drop BELOW → move to target's parent at target's index + 1.
+                # Move in forward order, incrementing index for each item.
                 parent = self._model.find_parent(target_id)
                 parent_id = parent.id if parent is not None else None
                 target_index = self._model.get_index_in_parent(target_id)
-                insert_index = target_index + 1
-                for item_id in moving_ids:
-                    self._model.move_item(item_id, parent_id, insert_index)
-                    insert_index += 1
+                if target_index is not None:
+                    insert_index = target_index + 1
+                    for item_id in moving_ids:
+                        self._model.move_item(item_id, parent_id, insert_index)
+                        insert_index += 1
 
             # Re-select the moved items (rebuild after ITEM_MOVED loses selection)
             self._view.select_items(moving_ids)
