@@ -194,8 +194,8 @@ class LayerOrderController(QObject):
             for lyr in self._qgis_draw_order():
                 model.add_layer(lyr.id(), lyr.name())
         else:
-            self._place_layers([lid for lid in self._layer_panel_order()
-                                if lid not in set(model.iter_layer_ids())])
+            known = set(model.iter_layer_ids())
+            self._place_layers([lid for lid in self._layer_panel_order() if lid not in known])
         for lid, lyr in qgis_layers.items():
             model.rename_layer(lid, lyr.name())
             node = root.findLayer(lid)

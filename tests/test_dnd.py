@@ -204,6 +204,45 @@ def test_drop_reselects_moved_items(mvc):
     assert mvc.view.selected_ids() == ["A"]
 
 
+# ---------- move up / down ----------
+
+def test_move_buttons_are_one_undo_step_and_keep_selection(mvc):
+    mvc.load([("g1", ["A", "B", "C"]), "D"])
+    mvc.view.render_selection(["C", "B"])
+    mvc.view.btn_move_up.click()
+    assert _model_shape(mvc.model.get_root()) == [("g1", ["B", "C", "A"]), "D"]
+    assert _view_shape(mvc.view) == _model_shape(mvc.model.get_root())
+    assert mvc.view.selected_ids() == ["B", "C"]
+    mvc.view.btn_move_up.click()                   # blocked at the top of g1
+    assert mvc.vc.undo_stack.count() == 1
+    mvc.view.btn_move_down.click()
+    mvc.vc.undo_stack.undo()
+    mvc.vc.undo_stack.undo()
+    assert _model_shape(mvc.model.get_root()) == [("g1", ["A", "B", "C"]), "D"]
+
+
+def test_move_shortcut_is_an_intent(mvc):
+    mvc.load(["A", "B"])
+    mvc.view.render_selection(["B"])
+    seen = []
+    mvc.view.move_by_one_requested.connect(lambda ids, up: seen.append((ids, up)))
+    QTest.keyClick(mvc.view.tree, Qt.Key.Key_Up, Qt.KeyboardModifier.ControlModifier)
+    assert seen == [(["B"], True)]
+    assert _model_shape(mvc.model.get_root()) == ["B", "A"]
+    keypad = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.KeypadModifier
+    QTest.keyClick(mvc.view.tree, Qt.Key.Key_Down, keypad)          # how macOS sends it
+    assert seen[-1] == (["B"], False)
+
+
+def test_move_buttons_follow_selection_and_control(mvc):
+    mvc.load(["A", "B"])
+    assert not mvc.view.btn_move_up.isEnabled()
+    mvc.view.render_selection(["A"])
+    assert mvc.view.btn_move_up.isEnabled() and mvc.view.btn_move_down.isEnabled()
+    mvc.model.set_control_enabled(False)
+    assert not mvc.view.btn_move_up.isEnabled()
+
+
 # ---------- undo never fights QGIS ----------
 
 def test_undo_keeps_layers_added_since(mvc):

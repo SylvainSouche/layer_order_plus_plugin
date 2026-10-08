@@ -68,6 +68,7 @@ class ViewController(QObject):
         v.rename_group_requested.connect(self._on_rename_group)
         v.delete_groups_requested.connect(self._on_delete_groups)
         v.move_to_boundary_requested.connect(self._on_move_to_boundary)
+        v.move_by_one_requested.connect(self._on_move_by_one)
         v.expand_requested.connect(self._on_expand)
         v.check_requested.connect(self._on_check)
         v.drop_requested.connect(self._on_drop)
@@ -200,6 +201,13 @@ class ViewController(QObject):
         with self._user_edit("Move to top" if to_top else "Move to bottom"):
             self._model.move_items_to_boundary(item_ids, to_top=to_top)
         self._view.render_selection(item_ids)
+
+    def _on_move_by_one(self, item_ids: list, up: bool) -> None:
+        if not item_ids:
+            return
+        with self._user_edit("Move up" if up else "Move down"):
+            self._model.move_items_by_one(item_ids, up)
+        self._view.render_selection(self._in_tree_order(item_ids))
 
     def _on_expand(self, group_ids: list, expanded: bool) -> None:
         # Expansion is UI state stored in the document; it is not undoable

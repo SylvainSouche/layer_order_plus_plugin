@@ -52,6 +52,7 @@ Layer Order panel; they always agree.
 | **Rename group** | Exactly one group selected. |
 | **Delete group** | One or more groups selected; their contents take their place. |
 | **Expand / Collapse group** | Context menu. |
+| **Move up / Move down** | Toolbar arrows, context menu, or **Ctrl+↑ / Ctrl+↓** (⌘ on macOS). Each selected item moves one step within its own group; adjacent selected items move together; an item already first/last in its group stays (use drag and drop to leave a group). One undo step. |
 | **Move to top / bottom** | Context menu: each selected item goes to the top/bottom of its own group, keeping their order. |
 
 Double-click a group (or click its arrow, or ←/→) to expand/collapse it.

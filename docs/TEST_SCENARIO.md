@@ -41,6 +41,16 @@ logging* on (Log Messages → LayerOrderPlus). Note the build from
 | 3.6 | Try to drag ABCD onto AB | Refused (no-drop cursor), nothing changes |
 | 3.7 | After each drop | Scroll position and other groups' expansion unchanged; moved items selected |
 
+## 3b. Move up / down
+
+| # | Action | Expected |
+|---|---|---|
+| 3b.1 | Select B → toolbar ▲ | B above A inside AB; map follows |
+| 3b.2 | ▲ again | Nothing moves (B is first in AB) |
+| 3b.3 | Select C and D (all of CD) → **Ctrl+↓** / **⌘↓** | Nothing moves: the block already fills CD |
+| 3b.4 | Select group AB → ▼ | AB moves below CD, inside ABCD |
+| 3b.5 | Ctrl+Z | Undoes the last step only |
+
 ## 4. QGIS's Layer Order panel
 
 | # | Action | Expected |

@@ -795,3 +795,80 @@ def test_load_from_json_tolerates_garbage(model):
     assert model.get_flattened_layer_ids() == ["x"]
     model.load_from_json("not json")
     assert model.get_root() == []
+
+
+# ---------- move_items_by_one ----------
+
+def _ids(nodes):
+    return [n.id if not isinstance(n, GroupNode) else (n.id, _ids(n.children)) for n in nodes]
+
+
+@pytest.mark.parametrize("start, selected, up, expected", [
+    (["x", "a", "b"], ["a", "b"], True, ["a", "b", "x"]),          # block moves together
+    (["a", "b", "x"], ["a", "b"], True, ["a", "b", "x"]),          # already at the top
+    (["x", "a", "y", "b"], ["a", "b"], True, ["a", "x", "b", "y"]),  # each one step
+    (["a", "x", "b", "y"], ["a", "b"], False, ["x", "a", "y", "b"]),
+    (["a", "b", "x"], ["b", "a"], False, ["x", "a", "b"]),         # click order irrelevant
+])
+def test_move_items_by_one_flat(model, start, selected, up, expected):
+    for lid in start:
+        model.add_layer(lid, lid)
+    model.move_items_by_one(selected, up)
+    assert model.get_flattened_layer_ids() == expected
+
+
+def test_move_items_by_one_stays_in_group_and_per_parent(model, captured_events):
+    g = model.create_group("G")
+    for lid in ("a", "b"):
+        model.add_layer(lid, lid, parent_id=g)
+    model.add_layer("x", "x")
+    model.add_layer("y", "y")
+    captured_events.clear()
+    assert model.move_items_by_one(["a", "y"], up=True)   # a is first in G: stays
+    assert _ids(model.get_root()) == [(g, ["a", "b"]), "y", "x"]
+    assert [e for e, _ in captured_events] == ["item_moved", "order_changed"]
+
+
+def test_move_items_by_one_group_moves_with_children(model):
+    model.add_layer("x", "x")
+    g = model.create_group("G")
+    model.add_layer("a", "a", parent_id=g)
+    assert model.move_items_by_one([g, "a"], up=True)      # a travels with G
+    assert _ids(model.get_root()) == [(g, ["a"]), "x"]
+
+
+def test_move_items_by_one_noop_emits_nothing(model, captured_events):
+    model.add_layer("a", "a")
+    captured_events.clear()
+    assert not model.move_items_by_one(["a"], up=True)
+    assert captured_events == []
+
+
+# ---------- review fixes (1.3.0) ----------
+
+def test_remove_layer_keeps_unrelated_empty_groups(model):
+    keep = model.create_group("Later")                 # empty on purpose
+    outer = model.create_group("Outer")
+    inner = model.create_group("Inner", parent_id=outer)
+    model.add_layer("a", "A", parent_id=inner)
+    model.add_layer("b", "B")
+    model.remove_layer("a")                            # empties Inner, then Outer
+    assert [n.id for n in model.get_root()] == [keep, "b"]
+
+
+def test_restore_structure_keeps_current_expansion(model):
+    g = model.create_group("G")
+    model.add_layer("a", "A", parent_id=g)
+    model.add_layer("b", "B")
+    snapshot = model.serialize()
+    model.move_item("b", g, 0)
+    model.set_expanded(g, False)                       # not an undoable edit
+    model.restore_structure(snapshot)
+    assert model.get_flattened_layer_ids() == ["a", "b"]
+    assert model.find_item(g).expanded is False
+
+
+def test_load_from_json_skips_duplicate_ids(model):
+    model.load_from_json('{"children": [{"type": "layer", "id": "a"}, '
+                         '{"type": "group", "id": "g", "children": [{"type": "layer", "id": "a"}]}]}')
+    assert model.get_flattened_layer_ids() == ["a"]
