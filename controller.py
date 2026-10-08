@@ -185,37 +185,41 @@ class LayerOrderController(QObject):
 
     def _reconcile_order_with_qgis(self, qgis_order):
         _vlog_method("_reconcile_order_with_qgis")
-        """Rebuild the Model's layer order to match QGIS's flat order.
+        """Reconcile the Model's order to match QGIS's flat order.
 
-        Strategy: try to honour the QGIS order with MINIMAL group destruction.
-        - If the QGIS order is compatible with our grouping (just reordering
-          top-level items or groups), do a minimal reorder — no groups removed.
-        - If the QGIS order splits layers across group boundaries (a layer
-          moved into or out of a group's position), only remove the SPECIFIC
-          group(s) that conflict, not all of them.
-        - Show a warning popup listing which groups will be removed.
+        Strategy: MINIMAL group destruction + reorder within groups.
+
+        For each group, check:
+        - CONTIGUOUS: all its descendant layers appear as a contiguous block
+          in qgis_order (no outside layers interleaved).
+        - If contiguous → group survives. Its children may be reordered to
+          match qgis_order (handles the "swap within group" case).
+        - If NOT contiguous → group's layers are interleaved with outside
+          layers. The group MUST be deleted to honour the QGIS order.
+          Only THESE groups are deleted; compatible groups are preserved.
+
+        After deletion, ALL levels of the tree are reordered to match qgis_order
+        (top-level items + children within each surviving group).
         """
         from .model import GroupNode, LayerNode
         model = self._vc._model
 
-        # Step 1: check if the QGIS order is compatible with existing groups.
-        # A group is "compatible" if all its layers appear contiguously in
-        # the QGIS order (same relative order, no outside layers interleaved).
+        # Step 1: find groups whose layers are NOT contiguous in qgis_order.
         conflicting_groups = self._find_conflicting_groups(qgis_order)
 
         if conflicting_groups:
             group_names = [model.find_item(gid).name for gid in conflicting_groups
                           if model.find_item(gid) is not None]
-            _log(f"_reconcile: conflicting groups: {group_names}", Qgis.Warning)
+            _log(f"_reconcile: conflicting groups (non-contiguous): {group_names}", Qgis.Warning)
             from qgis.PyQt.QtWidgets import QMessageBox
             ret = QMessageBox.warning(
                 self._view,
                 "Layer Order Plus",
                 f"A layer was moved in the standard Layer Order panel in a way that "
-                f"conflicts with the following group(s):\n\n"
+                f"interleaves layers from the following group(s):\n\n"
                 f"  {', '.join(group_names)}\n\n"
                 f"To honour the new order, these group(s) will be removed and their "
-                f"layers re-ordered flat. Other groups are preserved.\n\n"
+                f"layers re-ordered. Other groups are preserved.\n\n"
                 f"Click OK to proceed, or Cancel to keep the current grouping "
                 f"(the standard panel's order will be overridden).",
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
@@ -225,22 +229,22 @@ class LayerOrderController(QObject):
                 _log("User cancelled reconciliation — re-applying Plus order to QGIS")
                 self._apply_now_force()
                 return
-            # Remove only the conflicting groups (unwrap their children in place)
             with model.block_notifications():
                 for gid in conflicting_groups:
                     model.delete_group(gid, unwrap_children=True)
 
-        # Step 2: now reorder top-level items to match QGIS's flat order.
-        # Build the desired top-level order: walk qgis_order, and for each
-        # layer, find its top-level ancestor in the Model.
-        self._reorder_top_level_to_match_qgis(qgis_order)
+        # Step 2: reorder ALL levels to match qgis_order.
+        # This handles both top-level reordering AND within-group reordering
+        # (e.g., when two layers within the same group are swapped in the
+        # native panel).
+        self._reorder_all_levels_to_match_qgis(qgis_order)
 
     def _find_conflicting_groups(self, qgis_order):
         """Return list of group_ids whose layers are NOT contiguous in qgis_order.
 
-        A group is compatible if all its descendant layers appear as a
-        contiguous block in qgis_order (allowing the block to be in any
-        position, but no outside layers interleaved).
+        A group is "contiguous" if all its descendant layers appear as a
+        contiguous block in qgis_order (no outside layers interleaved).
+        Non-contiguous groups must be deleted to honour the QGIS order.
         """
         _vlog_method("_find_conflicting_groups")
         from .model import GroupNode, LayerNode
@@ -260,11 +264,9 @@ class LayerOrderController(QObject):
             if isinstance(node, GroupNode):
                 group_layer_ids = collect_layer_ids(node)
                 if group_layer_ids:
-                    # Find the positions of these layers in qgis_order
                     positions = [qgis_order.index(lid) for lid in group_layer_ids
                                  if lid in qgis_order]
                     if positions:
-                        # Check contiguity: max - min + 1 should == count
                         if max(positions) - min(positions) + 1 != len(positions):
                             conflicting.append(node.id)
                 for ch in node.children:
@@ -274,54 +276,54 @@ class LayerOrderController(QObject):
             walk_groups(top)
         return conflicting
 
-    def _reorder_top_level_to_match_qgis(self, qgis_order):
-        """Reorder top-level Model items to match QGIS's flat order.
+    def _reorder_all_levels_to_match_qgis(self, qgis_order):
+        """Reorder ALL levels of the Model tree to match QGIS's flat order.
 
-        Walks qgis_order; for each layer id, finds its top-level ancestor
-        in the Model. Builds the desired top-level order (deduplicating —
-        a group appears once, at the position of its first layer in qgis_order).
-        Then reorders the Model's root to match.
+        For each node (top-level or within a group), sort its direct children
+        by the minimum qgis_order position of any descendant layer. This
+        handles:
+        - Top-level group/layer reordering
+        - Within-group layer reordering (when layers are swapped in native)
+        - Nested group reordering
+
+        Groups that have no layers in qgis_order are kept at their current
+        relative position (appended at the end).
         """
-        _vlog_method("_reorder_top_level_to_match_qgis")
+        _vlog_method("_reorder_all_levels_to_match_qgis")
         from .model import GroupNode, LayerNode
         model = self._vc._model
 
-        # Build mapping: layer_id → top-level ancestor id
-        layer_to_toplevel = {}
-        for top in model.get_root():
-            def walk(node, toplevel_id):
-                if isinstance(node, LayerNode):
-                    layer_to_toplevel[node.id] = toplevel_id
-                elif isinstance(node, GroupNode):
-                    for ch in node.children:
-                        walk(ch, toplevel_id)
-            walk(top, top.id)
+        # Build mapping: layer_id → position in qgis_order
+        layer_pos = {}
+        for i, lid in enumerate(qgis_order):
+            layer_pos[lid] = i
 
-        # Build desired top-level order
-        desired_order = []
-        seen = set()
-        for lid in qgis_order:
-            if lid in layer_to_toplevel:
-                top_id = layer_to_toplevel[lid]
-                if top_id not in seen:
-                    desired_order.append(top_id)
-                    seen.add(top_id)
+        def min_descendant_position(node):
+            """Return the minimum qgis_order position of any descendant layer."""
+            if isinstance(node, LayerNode):
+                return layer_pos.get(node.id, 999999)
+            if isinstance(node, GroupNode):
+                positions = [min_descendant_position(ch) for ch in node.children]
+                return min(positions) if positions else 999999
+            return 999999
 
-        # Add any top-level items not in qgis_order (e.g., empty groups)
-        for top in model.get_root():
-            if top.id not in seen:
-                desired_order.append(top.id)
-                seen.add(top.id)
+        def reorder_children(parent_children):
+            """Sort a list of children by their min descendant qgis_order position."""
+            # Sort by min position; items with no layers stay at the end (stable)
+            parent_children.sort(key=lambda n: min_descendant_position(n))
 
-        # Reorder: take all top-level items, re-insert in desired order
+        def reorder_recursive(node):
+            if isinstance(node, GroupNode):
+                reorder_children(node.children)
+                for ch in node.children:
+                    reorder_recursive(ch)
+
         with model.block_notifications():
-            items = {}
-            for top in model.get_root():
-                items[top.id] = top
-            model._root.clear()
-            for top_id in desired_order:
-                if top_id in items:
-                    model._root.append(items[top_id])
+            # Reorder top-level
+            reorder_children(model._root)
+            # Recurse into groups
+            for top in model._root:
+                reorder_recursive(top)
         self._vc._rebuild_view_from_model()
 
     def _on_tree_visibility_changed(self, node):
