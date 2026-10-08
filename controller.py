@@ -201,62 +201,137 @@ class LayerOrderController(QObject):
 
     def _reconcile_order_with_qgis(self, qgis_order):
         _vlog_method("_reconcile_order_with_qgis")
-        """Reconcile the Model's order to match QGIS's flat order.
+        """Reconcile the Model's tree to match QGIS's flat order.
 
-        Strategy: MINIMAL group destruction + reorder within groups.
+        NEW ALGORITHM (user-confirmed 1.2.15):
 
-        For each group, check:
-        - CONTIGUOUS: all its descendant layers appear as a contiguous block
-          in qgis_order (no outside layers interleaved).
-        - If contiguous → group survives. Its children may be reordered to
-          match qgis_order (handles the "swap within group" case).
-        - If NOT contiguous → group's layers are interleaved with outside
-          layers. The group MUST be deleted to honour the QGIS order.
-          Only THESE groups are deleted; compatible groups are preserved.
+        Group membership is determined by CONTIGUITY in the flat order.
+        The tree is rebuilt from the flat order + existing group definitions:
 
-        After deletion, ALL levels of the tree are reordered to match qgis_order
-        (top-level items + children within each surviving group).
+        - Walk the flat QGIS order.
+        - For each group, check if its layers form a contiguous block in
+          the flat order. If yes → the group survives; any layers that
+          appear between the group's first and last layer become children
+          of that group (they were "dropped into" the group).
+        - Layers outside any group's contiguous block are top-level (or
+          inside the nearest enclosing group if nested).
+        - Groups whose layers are NOT contiguous are preserved but their
+          children are reordered to match the flat order. Layers from
+          outside that end up between the group's children become members.
+
+        Rules (from user):
+        1. Moving layers within a group → reorder leaves, group untouched.
+        2. Moving a layer adjacent to a group (not between its children)
+           → sibling of the group, NOT a child.
+        3. Moving a layer between a group's children → becomes part of
+           that group.
+        4. Moving a layer out from between a group's children → leaves
+           the group.
+        5. Empty groups are NOT pruned (only the "remove empty groups on
+           layer delete" setting prunes, and this is a reorder not a delete).
+
+        No warning popup is shown — the reconciliation is automatic and
+        non-destructive (groups are never deleted).
         """
         from .model import GroupNode, LayerNode
         model = self._vc._model
 
-        # Step 1: find groups whose layers are NOT contiguous in qgis_order.
-        conflicting_groups = self._find_conflicting_groups(qgis_order)
-
-        if conflicting_groups:
-            group_names = [model.find_item(gid).name for gid in conflicting_groups
-                          if model.find_item(gid) is not None]
-            _log(f"_reconcile: conflicting groups (non-contiguous): {group_names}", Qgis.Warning)
-            from qgis.PyQt.QtWidgets import QMessageBox
-            ret = QMessageBox.warning(
-                self._view,
-                "Layer Order Plus",
-                f"A layer was moved in the standard Layer Order panel in a way that "
-                f"interleaves layers from the following group(s):\n\n"
-                f"  {', '.join(group_names)}\n\n"
-                f"To honour the new order, these group(s) will be removed and their "
-                f"layers re-ordered. Other groups are preserved.\n\n"
-                f"Click OK to proceed, or Cancel to keep the current grouping "
-                f"(the standard panel's order will be overridden).",
-                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Ok
-            )
-            if ret != QMessageBox.StandardButton.Ok:
-                _log("User cancelled reconciliation — re-applying Plus order to QGIS")
-                self._apply_now_force()
-                return
-            with model.block_notifications():
-                for gid in conflicting_groups:
-                    model.delete_group(gid, unwrap_children=True)
-
-        # Step 2: reorder ALL levels to match qgis_order.
-        # This handles both top-level reordering AND within-group reordering
-        # (e.g., when two layers within the same group are swapped in the
-        # native panel).
         _log(f"_reconcile: qgis_order={qgis_order}")
-        _log(f"_reconcile: before reorder, our_order={self._vc.get_flattened_layer_ids()}")
-        self._reorder_all_levels_to_match_qgis(qgis_order)
-        _log(f"_reconcile: after reorder, our_order={self._vc.get_flattened_layer_ids()}")
+        _log(f"_reconcile: before, our_order={self._vc.get_flattened_layer_ids()}")
+
+        # Step 1: collect all groups (id → set of descendant layer ids)
+        # from the current Model tree.
+        all_groups = {}  # group_id → set of layer_ids currently inside
+        def collect_groups(node):
+            if isinstance(node, GroupNode):
+                lids = set()
+                def walk(n):
+                    if isinstance(n, LayerNode):
+                        lids.add(n.id)
+                    elif isinstance(n, GroupNode):
+                        for ch in n.children:
+                            walk(ch)
+                walk(node)
+                all_groups[node.id] = lids
+                for ch in node.children:
+                    collect_groups(ch)
+        for top in model.get_root():
+            collect_groups(top)
+
+        # Step 2: for each group, find the min and max position of its
+        # current layers in qgis_order. Layers that fall between min and
+        # max (inclusive) belong to that group.
+        group_ranges = {}  # group_id → (min_pos, max_pos)
+        for gid, lids in all_groups.items():
+            positions = [qgis_order.index(lid) for lid in lids if lid in qgis_order]
+            if positions:
+                group_ranges[gid] = (min(positions), max(positions))
+
+        # Step 3: assign each layer in qgis_order to a group (or top-level).
+        # A layer belongs to the INNERMOST group whose range contains it.
+        # For nested groups, we need to check parent-child relationships.
+        layer_to_group = {}  # layer_id → group_id (innermost containing group)
+        for i, lid in enumerate(qgis_order):
+            # Find all groups whose range contains this position
+            containing = []
+            for gid, (gmin, gmax) in group_ranges.items():
+                if gmin <= i <= gmax:
+                    containing.append(gid)
+            if not containing:
+                layer_to_group[lid] = None  # top-level
+            elif len(containing) == 1:
+                layer_to_group[lid] = containing[0]
+            else:
+                # Multiple groups contain this position → pick the innermost
+                # (the one whose range is smallest = most specific)
+                containing.sort(key=lambda g: group_ranges[g][1] - group_ranges[g][0])
+                layer_to_group[lid] = containing[0]
+
+        # Step 4: rebuild the tree from the flat order + group assignments.
+        # Preserve group metadata (id, name, expanded) from the current Model.
+        group_meta = {}  # group_id → (name, expanded)
+        def collect_meta(node):
+            if isinstance(node, GroupNode):
+                group_meta[node.id] = (node.name, node.expanded)
+                for ch in node.children:
+                    collect_meta(ch)
+        for top in model.get_root():
+            collect_meta(top)
+
+        # Build new tree: walk qgis_order, group consecutive layers that
+        # belong to the same group.
+        new_root = []
+        i = 0
+        while i < len(qgis_order):
+            lid = qgis_order[i]
+            gid = layer_to_group.get(lid)
+            if gid is None:
+                # Top-level layer
+                lyr = QgsProject.instance().mapLayer(lid)
+                name = lyr.name() if lyr else lid
+                new_root.append(LayerNode(id=lid, name=name))
+                i += 1
+            else:
+                # Collect all consecutive layers belonging to this group
+                group_layer_ids = []
+                while i < len(qgis_order) and layer_to_group.get(qgis_order[i]) == gid:
+                    group_layer_ids.append(qgis_order[i])
+                    i += 1
+                # Build the group node
+                name, expanded = group_meta.get(gid, ("Group", True))
+                children = []
+                for glid in group_layer_ids:
+                    lyr = QgsProject.instance().mapLayer(glid)
+                    lname = lyr.name() if lyr else glid
+                    children.append(LayerNode(id=glid, name=lname))
+                new_root.append(GroupNode(id=gid, name=name, expanded=expanded,
+                                          children=children))
+
+        # Step 5: replace the Model's root + rebuild the View
+        with model.block_notifications():
+            model._root = new_root
+        self._vc._rebuild_view_from_model()
+        _log(f"_reconcile: after, our_order={self._vc.get_flattened_layer_ids()}")
 
     def _find_conflicting_groups(self, qgis_order):
         """Return list of group_ids whose layers are NOT contiguous in qgis_order.
