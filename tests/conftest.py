@@ -100,6 +100,15 @@ def _install_qgis_stubs():
             return QIcon()
     qgis_core.QgsIconUtils = _QgsIconUtils
 
+    class _QgsLayerTree:
+        @staticmethod
+        def isLayer(node):
+            return hasattr(node, "layerId")
+        @staticmethod
+        def isGroup(node):
+            return hasattr(node, "findLayers")
+    qgis_core.QgsLayerTree = _QgsLayerTree
+
     qgis_core.QgsMapLayer = type("QgsMapLayer", (), {})
     qgis_core.QgsVectorLayer = type("QgsVectorLayer", (), {})
 
@@ -174,6 +183,20 @@ class _MockSignal:
 
 
 _install_qgis_stubs()
+
+
+def _register_plugin_package():
+    """Make the plugin importable as `layer_order_plus_qgis4` (its folder name
+    differs) without running __init__.py, for every test module."""
+    if "layer_order_plus_qgis4" in sys.modules:
+        return
+    plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pkg = types.ModuleType("layer_order_plus_qgis4")
+    pkg.__path__ = [plugin_root]
+    sys.modules["layer_order_plus_qgis4"] = pkg
+
+
+_register_plugin_package()
 
 
 # ----------------------------------------------------------------------

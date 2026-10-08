@@ -3,12 +3,12 @@
 Provides:
 - _log(msg, level) — always logs to QgsMessageLog (LayerOrderPlus tab)
 - _vlog(msg) — verbose logging, only active when verbose mode is ON
-- set_verbose(enabled) — toggle verbose mode (called by the View checkbox)
+- set_verbose(enabled) — toggle verbose mode (wired by plugin.py to the View checkbox)
 - is_verbose() — query current state
 
-Verbose mode is OFF by default. When ON, every method in every class
-logs its entry/exit via _vlog. This is essential for debugging the
-concurrent-action issues during drag-drop.
+Verbose mode is OFF by default. When ON, _vlog traces drops, model
+mutations and QGIS sync (tags: [M] Model, [VC] ViewController,
+[C] Controller, [TW] tree widget).
 
 The Model (Qt-free) uses _vlog too — it falls back to print() when
 QgsMessageLog isn't available (e.g., in unit tests).
@@ -58,27 +58,6 @@ def _vlog(msg) -> None:
     if not _verbose:
         return
     _log(msg)
-
-
-def _vlog_method(name: str, tag: str = "") -> None:
-    """Verbose log a method entry. Call at the top of every method.
-
-    tag: optional layer identifier — [M] Model, [V] View, [VC] ViewController,
-         [C] Controller, [P] Plugin, [TW] TreeWidget.
-    """
-    if not _verbose:
-        return
-    if tag:
-        _log(f"{tag} → {name}")
-    else:
-        _log(f"→ {name}")
-
-
-def _vlog_method_exit(name: str) -> None:
-    """Verbose log a method exit."""
-    if not _verbose:
-        return
-    _log(f"← {name}")
 
 
 def _vlog_error(name: str, exc: Exception) -> None:

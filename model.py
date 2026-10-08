@@ -1,41 +1,44 @@
-"""Layer Order Plus — Model (plain Python, Qt-free).
+"""Layer Order Plus — Model: the single source of truth (plain Python, no Qt, no QGIS).
 
-The Model is the single source of truth for the order tree: groups, layers,
-their nesting, expanded state, and per-layer visibility. It owns NO Qt code
-and NO QGIS code — every external side-effect (writing customLayerOrder,
-updating QTreeWidget, persisting to project) is the Controller's job in
-response to Model events.
+What the Model owns
+-------------------
+* The Plus document: order groups, their nesting and expanded state, and
+  the draw order of the layers inside them.
+* The document setting ``remove_empty_groups``.
 
-Notifications (observer pattern):
-    Model emits coarse event tuples to registered listeners:
-        (event_type: str, payload: dict)
-    Use the `block_notifications()` context manager to suppress emits during
-    bulk operations (project load, undo/redo replay). Other listeners see
-    nothing during the block; the caller is responsible for emitting a
-    `model_loaded` event after the block if a bulk replace happened.
+What the Model mirrors (written only by the Controller, from QGIS)
+------------------------------------------------------------------
+* Each layer's display name and effective visibility.
+* ``control_enabled`` — QGIS's ``hasCustomLayerOrder``.
 
-This is the 1.2.0 extraction: Model exists alongside the existing dock.py,
-which becomes a thin View+Controller+ViewController until 1.3.0/1.4.0 split
-the roles into separate modules.
+Nobody but the Model mutates the tree. Every mutation notifies listeners
+with ``(event_type, payload)``. Inside ``block_notifications()`` the
+granular events are suppressed and a single resync (``model_loaded``, plus
+``order_changed`` if the structure changed) is emitted on exit, so
+listeners never miss a change.
+
+Persistence (``serialize`` / ``load_from_json``) and undo snapshots
+(``restore_structure``) carry the document only — never the mirrored QGIS
+state.
 """
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from contextlib import contextmanager
-
-try:
-    from .logger import _vlog, _vlog_method, _vlog_error
-except ImportError:
-    def _vlog(msg): pass
-    def _vlog_method(name, tag=""): pass
-    def _vlog_error(name, exc): pass
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional, Union
 
+try:
+    from .logger import _vlog, _vlog_error
+except ImportError:  # pragma: no cover - standalone use
+    def _vlog(msg): pass
+    def _vlog_error(name, exc): pass
+
 
 # ====================================================================
-# Schema constants
+# Schema
 # ====================================================================
 
 TREE_JSON_SCHEMA_VERSION = 1
@@ -45,15 +48,15 @@ TYPE_LAYER = "layer"
 
 
 # ====================================================================
-# Node types
+# Nodes
 # ====================================================================
 
 @dataclass
 class LayerNode:
-    """A leaf node referencing a QGIS layer by id."""
+    """A leaf referencing a QGIS layer by id."""
     id: str                    # QGIS layer id
     name: str
-    visible: bool = True
+    visible: bool = True       # mirror of QGIS effective visibility
 
     @property
     def is_group(self) -> bool:
@@ -62,7 +65,7 @@ class LayerNode:
 
 @dataclass
 class GroupNode:
-    """An order-group. Children are LayerNode | GroupNode in draw order."""
+    """An order group. Children are LayerNode | GroupNode in draw order (top first)."""
     id: str                    # "grp_" + 10 hex chars
     name: str
     expanded: bool = True
@@ -82,29 +85,39 @@ def new_group_id() -> str:
 
 
 # ====================================================================
-# Event types
+# Events
 # ====================================================================
 
-# Bulk replace — entire tree was swapped (project load, undo replay)
+# Resync everything (load, undo, reconcile, end of a notification block)
 EVENT_MODEL_LOADED = "model_loaded"
 
-# Per-node structural changes
+# Structural changes
 EVENT_LAYER_ADDED = "layer_added"
 EVENT_LAYER_REMOVED = "layer_removed"
-EVENT_LAYER_RENAMED = "layer_renamed"
 EVENT_GROUP_CREATED = "group_created"
 EVENT_GROUP_DELETED = "group_deleted"
-EVENT_GROUP_RENAMED = "group_renamed"
 EVENT_ITEM_MOVED = "item_moved"
 
-# Per-node state changes (no structural effect)
+# Display-only changes
+EVENT_LAYER_RENAMED = "layer_renamed"
+EVENT_GROUP_RENAMED = "group_renamed"
 EVENT_VISIBILITY_CHANGED = "visibility_changed"
 EVENT_EXPANDED_CHANGED = "expanded_changed"
+EVENT_SETTING_CHANGED = "setting_changed"     # payload: {"key", "value"}
 
-# Coarse trailing signal — fired after any structural change so listeners
-# that only care about the flattened order (Controller applying to QGIS)
-# can do a single re-flatten instead of reacting to every individual event.
+# Trailing signal after any structural change: the flattened order may differ.
+# Payload {"resync": True} when it follows a model_loaded (already a full resync).
 EVENT_ORDER_CHANGED = "order_changed"
+
+SETTING_CONTROL_ENABLED = "control_enabled"
+SETTING_REMOVE_EMPTY_GROUPS = "remove_empty_groups"
+
+_STRUCTURAL_EVENTS = frozenset({
+    EVENT_LAYER_ADDED, EVENT_LAYER_REMOVED, EVENT_GROUP_CREATED,
+    EVENT_GROUP_DELETED, EVENT_ITEM_MOVED, EVENT_MODEL_LOADED,
+})
+
+Listener = Callable[[str, dict], None]
 
 
 # ====================================================================
@@ -112,486 +125,434 @@ EVENT_ORDER_CHANGED = "order_changed"
 # ====================================================================
 
 class LayerOrderModel:
-    """Single source of truth for the order tree.
-
-    All mutations go through methods on this class. Listeners are notified
-    after each mutation. Use `block_notifications()` to suppress emits
-    during bulk operations.
-    """
+    """Single source of truth for the order tree. See module docstring."""
 
     def __init__(self) -> None:
         self._root: list[Node] = []
-        self._listeners: list[Callable[[str, dict], None]] = []
-        self._notification_blocked: bool = False
-        # Pending events collected during a block (so we can coalesce
-        # into a single model_loaded emit on exit, if a structural change
-        # happened). None = no pending structural change.
-        self._pending_order_change: bool = False
-        # Per-project setting (QualityOverhaul 2.2): whether to auto-prune
-        # groups that become empty after a layer is removed.
-        self._remove_empty_groups: bool = True
+        self._listeners: list[Listener] = []
+        self._block_depth = 0
+        self._suppressed = False          # something was emitted while blocked
+        self._suppressed_structural = False
+        self._settings = {
+            SETTING_CONTROL_ENABLED: False,
+            SETTING_REMOVE_EMPTY_GROUPS: True,
+        }
 
     # ------------------------------------------------------------------
-    # Listener registration
+    # Listeners
     # ------------------------------------------------------------------
-    def add_listener(self, cb: Callable[[str, dict], None]) -> None:
-        """Register a listener. Called as cb(event_type, payload) on every emit."""
+    def add_listener(self, cb: Listener) -> None:
+        """Register `cb(event_type, payload)`."""
         if cb not in self._listeners:
             self._listeners.append(cb)
 
-    def remove_listener(self, cb: Callable[[str, dict], None]) -> None:
-        try:
+    def remove_listener(self, cb: Listener) -> None:
+        if cb in self._listeners:
             self._listeners.remove(cb)
-        except ValueError:
-            pass  # already removed
 
     @contextmanager
     def block_notifications(self):
-        """Suppress all emits while inside the with-block.
+        """Batch mutations: no granular events inside, one resync on exit.
 
-        If a structural change happens during the block, a single
-        `order_changed` event is emitted on exit (but no per-node events).
-        Listeners that need per-node granularity should not use bulk
-        operations under a block.
+        On exit (outermost block only), if anything changed, listeners get
+        ``model_loaded`` and, if the structure changed, ``order_changed``.
         """
-        prev = self._notification_blocked
-        self._notification_blocked = True
-        prev_pending = self._pending_order_change
+        self._block_depth += 1
         try:
             yield self
         finally:
-            self._notification_blocked = prev
-            if self._pending_order_change and not prev:
-                # We accumulated a structural change — emit a coarse signal
-                # so order-dependent listeners know to re-flatten.
-                self._emit(EVENT_ORDER_CHANGED, {})
-            self._pending_order_change = prev_pending
+            self._block_depth -= 1
+            if self._block_depth == 0 and self._suppressed:
+                structural = self._suppressed_structural
+                self._suppressed = self._suppressed_structural = False
+                self._emit(EVENT_MODEL_LOADED, {})
+                if structural:
+                    self._emit(EVENT_ORDER_CHANGED, {"resync": True})
 
     def _emit(self, event_type: str, payload: dict) -> None:
-        """Internal: send an event to all listeners (unless blocked)."""
-        if self._notification_blocked:
-            if event_type in (EVENT_LAYER_ADDED, EVENT_LAYER_REMOVED,
-                              EVENT_GROUP_CREATED, EVENT_GROUP_DELETED,
-                              EVENT_ITEM_MOVED, EVENT_MODEL_LOADED):
-                self._pending_order_change = True
+        if self._block_depth:
+            self._suppressed = True
+            if event_type in _STRUCTURAL_EVENTS:
+                self._suppressed_structural = True
             return
-        for cb in list(self._listeners):  # copy in case a listener removes itself
+        for cb in list(self._listeners):  # a listener may remove itself
             try:
                 cb(event_type, payload)
             except Exception as exc:
-                # Listener errors must not break the Model, but they must not
-                # vanish either — a failing View update is exactly the kind
-                # of silent desync that is impossible to debug otherwise.
+                # One failing listener must not break the others, but it
+                # must not vanish either.
                 _vlog_error(f"[M] listener for {event_type}", exc)
 
+    def _structure_changed(self, event_type: str, payload: dict) -> None:
+        self._emit(event_type, payload)
+        self._emit(EVENT_ORDER_CHANGED, {"resync": True} if event_type == EVENT_MODEL_LOADED else {})
+
     # ------------------------------------------------------------------
-    # Query methods
+    # Queries
     # ------------------------------------------------------------------
     def get_root(self) -> list[Node]:
-        """Return the top-level node list (read-only — caller must not mutate)."""
+        """Top-level nodes. Read-only: never mutate what this returns."""
         return self._root
 
+    def walk(self) -> Iterator[tuple[Node, Optional[GroupNode]]]:
+        """Yield (node, parent) for every node, pre-order (display order)."""
+        def rec(nodes, parent):
+            for n in nodes:
+                yield n, parent
+                if isinstance(n, GroupNode):
+                    yield from rec(n.children, n)
+        yield from rec(self._root, None)
+
     def find_item(self, item_id: str) -> Optional[Node]:
-        """Find any node by id. Returns None if not found."""
-        def walk(node: Node):
-            if node.id == item_id:
-                return node
-            if isinstance(node, GroupNode):
-                for ch in node.children:
-                    found = walk(ch)
-                    if found is not None:
-                        return found
-            return None
-        for top in self._root:
-            found = walk(top)
-            if found is not None:
-                return found
-        return None
+        return next((n for n, _ in self.walk() if n.id == item_id), None)
 
     def find_parent(self, item_id: str) -> Optional[GroupNode]:
-        """Return the parent GroupNode of `item_id`, or None if top-level."""
-        def walk(node: Node, parent: Optional[GroupNode]):
-            if node.id == item_id:
-                return parent
-            if isinstance(node, GroupNode):
-                for ch in node.children:
-                    found = walk(ch, node)
-                    if found is not None:
-                        return found
-            return None
-        for top in self._root:
-            found = walk(top, None)
-            if found is not None:
-                return found
-        return None
+        """Parent group of `item_id`, or None if top-level (or unknown)."""
+        return next((p for n, p in self.walk() if n.id == item_id), None)
+
+    def _siblings(self, parent: Optional[GroupNode]) -> list[Node]:
+        return parent.children if parent is not None else self._root
 
     def get_index_in_parent(self, item_id: str) -> Optional[int]:
-        """Return the index of `item_id` within its parent (or top-level)."""
-        parent = self.find_parent(item_id)
-        siblings = parent.children if parent is not None else self._root
-        for i, sib in enumerate(siblings):
-            if sib.id == item_id:
-                return i
-        return None
+        siblings = self._siblings(self.find_parent(item_id))
+        return next((i for i, s in enumerate(siblings) if s.id == item_id), None)
+
+    def get_depth(self, item_id: str) -> int:
+        """1 for top-level, 2 for one level deep, ...; 0 if unknown."""
+        depth = 0
+        node = self.find_item(item_id)
+        while node is not None:
+            depth += 1
+            node = self.find_parent(node.id)
+        return depth
 
     def iter_layer_ids(self) -> Iterator[str]:
-        """Yield every layer id in the tree, depth-first."""
-        def walk(node: Node):
-            if isinstance(node, LayerNode):
-                yield node.id
-            elif isinstance(node, GroupNode):
-                for ch in node.children:
-                    yield from walk(ch)
-        for top in self._root:
-            yield from walk(top)
+        return (n.id for n, _ in self.walk() if isinstance(n, LayerNode))
 
     def get_flattened_layer_ids(self) -> list[str]:
-        """Return the depth-first flattened layer id list — what gets written to customLayerOrder."""
+        """Depth-first layer ids — exactly what is written to customLayerOrder."""
         return list(self.iter_layer_ids())
 
     def get_group_names(self) -> set[str]:
-        """Return the set of all group display names (recursive)."""
-        names: set[str] = set()
-        def walk(node: Node):
-            if isinstance(node, GroupNode):
-                names.add(node.name)
-                for ch in node.children:
-                    walk(ch)
-        for top in self._root:
-            walk(top)
-        return names
+        return {n.name for n, _ in self.walk() if isinstance(n, GroupNode)}
 
+    def unique_group_name(self, base: str = "New group") -> str:
+        """`base`, or `base 2`, `base 3`, ... — the first unused group name."""
+        existing = self.get_group_names()
+        if base not in existing:
+            return base
+        n = 2
+        while f"{base} {n}" in existing:
+            n += 1
+        return f"{base} {n}"
+
+    def tree_order_key(self) -> dict[str, int]:
+        """{node_id: pre-order position} for sorting ids in display order."""
+        return {n.id: i for i, (n, _) in enumerate(self.walk())}
+
+    def descendant_layer_ids(self, item_id: str) -> list[str]:
+        node = self.find_item(item_id)
+        if isinstance(node, LayerNode):
+            return [node.id]
+        if not isinstance(node, GroupNode):
+            return []
+        out: list[str] = []
+        def rec(n):
+            for ch in n.children:
+                if isinstance(ch, LayerNode):
+                    out.append(ch.id)
+                else:
+                    rec(ch)
+        rec(node)
+        return out
+
+    # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
+    def get_setting(self, key: str):
+        return self._settings[key]
+
+    def set_setting(self, key: str, value) -> None:
+        if key not in self._settings:
+            raise KeyError(key)
+        if self._settings[key] == value:
+            return
+        self._settings[key] = value
+        self._emit(EVENT_SETTING_CHANGED, {"key": key, "value": value})
+
+    # Convenience accessors kept for readability at call sites / tests
     def get_remove_empty_groups(self) -> bool:
-        return self._remove_empty_groups
+        return self._settings[SETTING_REMOVE_EMPTY_GROUPS]
 
     def set_remove_empty_groups(self, value: bool) -> None:
-        self._remove_empty_groups = bool(value)
-        # Setting change is not a structural event; no emit.
+        self.set_setting(SETTING_REMOVE_EMPTY_GROUPS, bool(value))
+
+    def get_control_enabled(self) -> bool:
+        return self._settings[SETTING_CONTROL_ENABLED]
+
+    def set_control_enabled(self, value: bool) -> None:
+        self.set_setting(SETTING_CONTROL_ENABLED, bool(value))
 
     # ------------------------------------------------------------------
-    # Bulk load / clear
+    # Bulk operations
     # ------------------------------------------------------------------
     def load_from_json(self, raw_json: str) -> None:
-        """Replace the entire tree from JSON.
+        """Replace the tree with a persisted document.
 
-        Emits EVENT_MODEL_LOADED (and a trailing EVENT_ORDER_CHANGED).
-        Schema version handling: missing → v1 legacy; mismatched → still
-        load as v1 (the format is forward-compatible so far).
-
-        If JSON parsing fails, the tree is cleared and a model_loaded event
-        is emitted (so listeners can rebuild an empty tree). This prevents
-        a corrupted project entry from crashing the plugin on load.
+        Malformed input (bad JSON, nodes without id) is tolerated: bad JSON
+        gives an empty tree, malformed nodes are skipped.
         """
+        _vlog("[M] load_from_json")
         new_root: list[Node] = []
         if raw_json:
             try:
                 obj = json.loads(raw_json)
             except (json.JSONDecodeError, TypeError):
-                # Corrupted JSON — clear and emit so listeners rebuild empty
-                self._root = []
-                self._emit(EVENT_MODEL_LOADED, {})
-                self._emit(EVENT_ORDER_CHANGED, {})
-                return
-            for top_node in obj.get("children", []):
-                built = self._build_node(top_node)
-                if built is not None:
-                    new_root.append(built)
+                obj = {}
+            for raw in obj.get("children", []) if isinstance(obj, dict) else []:
+                node = self._build_node(raw)
+                if node is not None:
+                    new_root.append(node)
         self._root = new_root
-        self._emit(EVENT_MODEL_LOADED, {})
-        self._emit(EVENT_ORDER_CHANGED, {})
+        self._structure_changed(EVENT_MODEL_LOADED, {})
 
-    def _build_node(self, node: dict) -> Optional[Node]:
-        t = node.get("type")
+    def _build_node(self, raw) -> Optional[Node]:
+        if not isinstance(raw, dict):
+            return None
+        t = raw.get("type")
         if t == TYPE_GROUP:
-            children: list[Node] = []
-            for ch in node.get("children", []):
-                built = self._build_node(ch)
-                if built is not None:
-                    children.append(built)
+            children = [c for c in (self._build_node(ch) for ch in raw.get("children", [])) if c]
             return GroupNode(
-                id=node.get("id", new_group_id()),
-                name=node.get("name", "Group"),
-                expanded=bool(node.get("expanded", True)),
+                id=raw.get("id") or new_group_id(),
+                name=raw.get("name", "Group"),
+                expanded=bool(raw.get("expanded", True)),
                 children=children,
             )
-        if t == TYPE_LAYER:
-            return LayerNode(
-                id=node["id"],
-                name=node.get("name", ""),
-                visible=bool(node.get("visible", True)),
-            )
+        if t == TYPE_LAYER and raw.get("id"):
+            return LayerNode(id=raw["id"], name=raw.get("name", ""))
         return None
 
+    def replace_root(self, nodes: list[Node]) -> None:
+        """Swap in a tree computed elsewhere (e.g. reconcile with QGIS)."""
+        _vlog("[M] replace_root")
+        self._root = list(nodes)
+        self._structure_changed(EVENT_MODEL_LOADED, {})
+
+    def restore_structure(self, raw_json: str) -> None:
+        """Restore a document snapshot (undo/redo) without touching QGIS facts.
+
+        The snapshot gives groups, nesting, order and expanded state. The
+        current layer set wins: layers removed since the snapshot are
+        dropped, layers added since are kept next to their current flat
+        neighbour. Layer names and visibility keep their current values.
+        """
+        _vlog("[M] restore_structure")
+        current = {n.id: n for n, _ in self.walk() if isinstance(n, LayerNode)}
+        current_order = self.get_flattened_layer_ids()
+
+        snapshot = LayerOrderModel()
+        snapshot.load_from_json(raw_json)
+
+        def adopt(nodes):
+            out = []
+            for n in nodes:
+                if isinstance(n, GroupNode):
+                    n.children = adopt(n.children)
+                    out.append(n)
+                elif n.id in current:
+                    out.append(copy.copy(current[n.id]))
+            return out
+        snapshot._root = adopt(snapshot._root)
+
+        # Layers that did not exist when the snapshot was taken
+        present = set(snapshot.iter_layer_ids())
+        for i, lid in enumerate(current_order):
+            if lid in present:
+                continue
+            node = copy.copy(current[lid])
+            prev = next((x for x in reversed(current_order[:i]) if x in present), None)
+            if prev is None:
+                snapshot._root.insert(0, node)
+            else:
+                parent = snapshot.find_parent(prev)
+                siblings = snapshot._siblings(parent)
+                siblings.insert(snapshot.get_index_in_parent(prev) + 1, node)
+            present.add(lid)
+
+        self._root = snapshot._root
+        self._structure_changed(EVENT_MODEL_LOADED, {})
+
     def clear(self) -> None:
-        """Empty the tree. Emits MODEL_LOADED + ORDER_CHANGED."""
-        _vlog(f"[M] clear")
+        _vlog("[M] clear")
         self._root = []
-        self._emit(EVENT_MODEL_LOADED, {})
-        self._emit(EVENT_ORDER_CHANGED, {})
+        self._structure_changed(EVENT_MODEL_LOADED, {})
 
     # ------------------------------------------------------------------
-    # Layer mutations
+    # Layers
     # ------------------------------------------------------------------
     def add_layer(self, layer_id: str, name: str, visible: bool = True,
                   parent_id: Optional[str] = None,
                   index: Optional[int] = None) -> None:
-        """Add a LayerNode under `parent_id` (or top-level if None) at `index`.
-
-        `index` = None (default) → append to the end.
-        Emits LAYER_ADDED + ORDER_CHANGED.
-        """
-        node = LayerNode(id=layer_id, name=name, visible=visible)
+        """Add a layer under `parent_id` (None = top level) at `index` (None = end)."""
+        _vlog(f"[M] add_layer {layer_id}")
         parent = self.find_item(parent_id) if parent_id else None
-        if parent_id is not None and not isinstance(parent, GroupNode):
-            # parent doesn't exist or isn't a group → fall back to top-level
+        if not isinstance(parent, GroupNode):
             parent = None
-        siblings = parent.children if parent is not None else self._root
-        if index is None:
-            idx = len(siblings)
-        else:
-            idx = max(0, min(index, len(siblings)))
-        siblings.insert(idx, node)
-        self._emit(EVENT_LAYER_ADDED, {
-            "layer_id": layer_id,
-            "name": name,
-            "visible": visible,
-            "parent_id": parent.id if parent is not None else None,
-            "index": idx,
+        siblings = self._siblings(parent)
+        idx = len(siblings) if index is None else max(0, min(index, len(siblings)))
+        siblings.insert(idx, LayerNode(id=layer_id, name=name, visible=visible))
+        self._structure_changed(EVENT_LAYER_ADDED, {
+            "layer_id": layer_id, "name": name, "visible": visible,
+            "parent_id": parent.id if parent else None, "index": idx,
         })
-        self._emit(EVENT_ORDER_CHANGED, {})
+
+    def add_layer_beside(self, layer_id: str, name: str, visible: bool,
+                         anchor_id: Optional[str], after: bool) -> None:
+        """Add a layer just before/after `anchor_id`, in the anchor's group.
+
+        Unknown or missing anchor → top of the top level.
+        """
+        parent = self.find_parent(anchor_id) if anchor_id else None
+        idx = self.get_index_in_parent(anchor_id) if anchor_id else None
+        if idx is None:
+            parent, idx = None, 0
+        elif after:
+            idx += 1
+        self.add_layer(layer_id, name, visible, parent.id if parent else None, idx)
 
     def remove_layer(self, layer_id: str) -> None:
-        """Remove a LayerNode by id. Emits LAYER_REMOVED + ORDER_CHANGED.
-
-        If get_remove_empty_groups() is True, any group that becomes empty
-        as a result is also removed (and GROUP_DELETED events are emitted
-        for each, in deepest-first order).
-        """
-        _vlog(f"[M] remove_layer")
-        parent = self.find_parent(layer_id)
-        siblings = parent.children if parent is not None else self._root
+        """Remove a layer; prune groups left empty if the setting says so."""
+        _vlog(f"[M] remove_layer {layer_id}")
+        siblings = self._siblings(self.find_parent(layer_id))
         for i, sib in enumerate(siblings):
             if sib.id == layer_id and isinstance(sib, LayerNode):
                 siblings.pop(i)
                 self._emit(EVENT_LAYER_REMOVED, {"layer_id": layer_id})
-                if self._remove_empty_groups:
+                if self.get_remove_empty_groups():
                     self._prune_empty_groups_internal()
                 self._emit(EVENT_ORDER_CHANGED, {})
                 return
-        # Layer not found — no-op
 
     def rename_layer(self, layer_id: str, new_name: str) -> None:
-        """Update a layer's display name. Emits LAYER_RENAMED (no ORDER_CHANGED — display only)."""
-        _vlog(f"[M] rename_layer")
         node = self.find_item(layer_id)
-        if not isinstance(node, LayerNode):
+        if not isinstance(node, LayerNode) or node.name == new_name:
             return
-        old_name = node.name
-        if old_name == new_name:
-            return
-        node.name = new_name
-        self._emit(EVENT_LAYER_RENAMED, {
-            "layer_id": layer_id,
-            "old_name": old_name,
-            "new_name": new_name,
-        })
+        old, node.name = node.name, new_name
+        self._emit(EVENT_LAYER_RENAMED, {"layer_id": layer_id, "old_name": old, "new_name": new_name})
 
     def set_visibility(self, layer_id: str, visible: bool) -> None:
-        """Toggle a layer's visibility flag. Emits VISIBILITY_CHANGED (no ORDER_CHANGED)."""
-        _vlog(f"[M] set_visibility")
         node = self.find_item(layer_id)
-        if not isinstance(node, LayerNode):
-            return
         visible = bool(visible)
-        if node.visible == visible:
+        if not isinstance(node, LayerNode) or node.visible == visible:
             return
         node.visible = visible
-        self._emit(EVENT_VISIBILITY_CHANGED, {
-            "layer_id": layer_id,
-            "visible": visible,
-        })
+        self._emit(EVENT_VISIBILITY_CHANGED, {"layer_id": layer_id, "visible": visible})
 
     # ------------------------------------------------------------------
-    # Group mutations
+    # Groups
     # ------------------------------------------------------------------
     def create_group(self, name: str, parent_id: Optional[str] = None,
                      index: Optional[int] = None) -> str:
-        """Create a GroupNode. Returns the new group_id.
-
-        `parent_id` = None → top-level. `index` = None → append.
-        Emits GROUP_CREATED + ORDER_CHANGED.
-        """
-        _vlog(f"[M] create_group")
-        gid = new_group_id()
-        node = GroupNode(id=gid, name=name)
+        """Create an empty group; returns its id."""
+        _vlog(f"[M] create_group {name!r}")
         parent = self.find_item(parent_id) if parent_id else None
-        if parent_id is not None and not isinstance(parent, GroupNode):
+        if not isinstance(parent, GroupNode):
             parent = None
-        siblings = parent.children if parent is not None else self._root
-        if index is None:
-            idx = len(siblings)
-        else:
-            idx = max(0, min(index, len(siblings)))
-        siblings.insert(idx, node)
-        self._emit(EVENT_GROUP_CREATED, {
-            "group_id": gid,
-            "name": name,
-            "parent_id": parent.id if parent is not None else None,
-            "index": idx,
+        siblings = self._siblings(parent)
+        idx = len(siblings) if index is None else max(0, min(index, len(siblings)))
+        gid = new_group_id()
+        siblings.insert(idx, GroupNode(id=gid, name=name))
+        self._structure_changed(EVENT_GROUP_CREATED, {
+            "group_id": gid, "name": name,
+            "parent_id": parent.id if parent else None, "index": idx,
         })
-        self._emit(EVENT_ORDER_CHANGED, {})
         return gid
 
     def delete_group(self, group_id: str, unwrap_children: bool = True) -> None:
-        """Delete a group. If unwrap_children, its children are promoted in place.
-
-        Emits GROUP_DELETED + ORDER_CHANGED. If unwrap_children is True the
-        payload's `unwrapped_children` lists the children that were promoted
-        (with their new parent_id + index).
-        """
-        _vlog(f"[M] delete_group")
+        """Delete a group; with `unwrap_children` its children take its place."""
+        _vlog(f"[M] delete_group {group_id}")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
         parent = self.find_parent(group_id)
-        siblings = parent.children if parent is not None else self._root
+        siblings = self._siblings(parent)
         idx = self.get_index_in_parent(group_id)
-        if idx is None:
-            return
-        promoted = []
-        if unwrap_children:
-            # Take children out, insert them at the group's slot in order
-            children = list(node.children)
-            for offset, ch in enumerate(children):
-                siblings.insert(idx + offset, ch)
-                promoted.append({
-                    "item_id": ch.id,
-                    "new_parent_id": parent.id if parent is not None else None,
-                    "new_index": idx + offset,
-                })
-        siblings.pop(idx + (len(promoted) if unwrap_children else 0))
-        self._emit(EVENT_GROUP_DELETED, {
+        siblings.pop(idx)
+        promoted = list(node.children) if unwrap_children else []
+        siblings[idx:idx] = promoted
+        self._structure_changed(EVENT_GROUP_DELETED, {
             "group_id": group_id,
-            "unwrapped_children": promoted,
+            "unwrapped_children": [{
+                "item_id": ch.id,
+                "new_parent_id": parent.id if parent else None,
+                "new_index": idx + k,
+            } for k, ch in enumerate(promoted)],
         })
-        self._emit(EVENT_ORDER_CHANGED, {})
 
     def rename_group(self, group_id: str, new_name: str) -> None:
-        """Update a group's display name. Emits GROUP_RENAMED (no ORDER_CHANGED)."""
-        _vlog(f"[M] rename_group")
         node = self.find_item(group_id)
-        if not isinstance(node, GroupNode):
+        if not isinstance(node, GroupNode) or node.name == new_name:
             return
-        old_name = node.name
-        if old_name == new_name:
-            return
-        node.name = new_name
-        self._emit(EVENT_GROUP_RENAMED, {
-            "group_id": group_id,
-            "old_name": old_name,
-            "new_name": new_name,
-        })
+        old, node.name = node.name, new_name
+        self._emit(EVENT_GROUP_RENAMED, {"group_id": group_id, "old_name": old, "new_name": new_name})
 
     def set_expanded(self, group_id: str, expanded: bool) -> None:
-        """Toggle a group's expanded flag. Emits EXPANDED_CHANGED (no ORDER_CHANGED)."""
-        _vlog(f"[M] set_expanded")
         node = self.find_item(group_id)
-        if not isinstance(node, GroupNode):
-            return
         expanded = bool(expanded)
-        if node.expanded == expanded:
+        if not isinstance(node, GroupNode) or node.expanded == expanded:
             return
         node.expanded = expanded
-        self._emit(EVENT_EXPANDED_CHANGED, {
-            "group_id": group_id,
-            "expanded": expanded,
-        })
+        self._emit(EVENT_EXPANDED_CHANGED, {"group_id": group_id, "expanded": expanded})
 
     # ------------------------------------------------------------------
-    # Move operations
+    # Moves
     # ------------------------------------------------------------------
-    def move_item(self, item_id: str, new_parent_id: Optional[str],
-                  new_index: int) -> None:
-        """Move a node to `new_parent_id` (None = top-level) at `new_index`.
+    def move_item(self, item_id: str, new_parent_id: Optional[str], new_index: int) -> None:
+        """Move one node to `new_parent_id` at `new_index` (index before removal).
 
-        Emits ITEM_MOVED + ORDER_CHANGED. Prevents moving a group into its
-        own descendant (no-op in that case). No-op if the position is unchanged.
-
-        If remove_empty_groups is True and the old parent group becomes empty
-        after the move, it is pruned automatically.
+        Index-based convenience kept for scripting/tests; UI code uses the
+        anchor-based move_items(). Moves never prune empty groups.
         """
-        _vlog(f"[M] move_item")
         node = self.find_item(item_id)
         if node is None:
             return
-        # Cycle prevention: don't move a group into itself or any descendant
-        if isinstance(node, GroupNode) and new_parent_id is not None:
-            target_parent = self.find_item(new_parent_id)
-            if target_parent is node or self._is_descendant(target_parent, node):
-                return
+        new_parent = self.find_item(new_parent_id) if new_parent_id else None
+        if not isinstance(new_parent, GroupNode):
+            new_parent = None
+        if new_parent is not None and self._is_descendant(new_parent, node):
+            return
         old_parent = self.find_parent(item_id)
         old_index = self.get_index_in_parent(item_id)
-        if old_index is None:
-            return
-        # Resolve new parent
-        new_parent = self.find_item(new_parent_id) if new_parent_id else None
-        if new_parent_id is not None and not isinstance(new_parent, GroupNode):
-            new_parent = None
-        # No-op detection: same parent + same effective index
-        if old_parent is new_parent:
-            # Adjust for the take that's about to happen
-            effective_new_index = new_index
-            if old_index < new_index:
-                effective_new_index = max(0, new_index - 1)
-            if effective_new_index == old_index:
-                return
-        # Take from old location
-        old_siblings = old_parent.children if old_parent is not None else self._root
-        old_siblings.pop(old_index)
-        # Insert at new location
-        new_siblings = new_parent.children if new_parent is not None else self._root
-        # Adjust index if same parent and we removed from before the target slot
         if old_parent is new_parent and old_index < new_index:
-            new_index = max(0, new_index - 1)
+            new_index -= 1  # account for the removal
+        if old_parent is new_parent and new_index == old_index:
+            return
+        self._siblings(old_parent).pop(old_index)
+        new_siblings = self._siblings(new_parent)
         new_index = max(0, min(new_index, len(new_siblings)))
         new_siblings.insert(new_index, node)
-        self._emit(EVENT_ITEM_MOVED, {
-            "item_id": item_id,
-            "old_parent_id": old_parent.id if old_parent is not None else None,
-            "old_index": old_index,
-            "new_parent_id": new_parent.id if new_parent is not None else None,
+        self._structure_changed(EVENT_ITEM_MOVED, {
+            "item_ids": [item_id],
+            "new_parent_id": new_parent.id if new_parent else None,
             "new_index": new_index,
         })
-        self._emit(EVENT_ORDER_CHANGED, {})
-        # NOTE: Do NOT prune empty groups on move_item. The user may be
-        # moving items out temporarily and wants to drop them back in.
-        # Pruning only happens on layer deletion (remove_layer), not on
-        # moves. The "remove empty groups" setting controls layer-delete
-        # pruning, not move pruning.
 
     def move_items(self, item_ids: list[str], new_parent_id: Optional[str],
                    before_id: Optional[str] = None) -> bool:
-        """Atomically move several nodes into `new_parent_id` (None = top-level).
+        """Atomically move nodes into `new_parent_id` (None = top level).
 
-        The moved nodes are inserted as one contiguous block, in the order
-        given by `item_ids`, immediately before the sibling `before_id`
-        (None → appended at the end of the parent).
+        The nodes are inserted as one contiguous block, in the given order,
+        just before the sibling `before_id` (None → at the end). The anchor
+        is resolved after the movers are taken out, so it can't be thrown
+        off by shifting indices.
 
-        Unlike repeated move_item() calls, the anchor is a sibling id, not
-        an index, so it stays valid while the movers are being taken out.
-
-        Ids that are descendants of another mover are ignored (they travel
-        with their ancestor). Returns False (no-op, no emit) if the move is
-        invalid: unknown parent, anchor not a child of the parent, anchor
-        is itself a mover, or the parent is a mover / descendant of one.
-
-        Emits a single ITEM_MOVED (payload: item_ids, new_parent_id) +
-        ORDER_CHANGED if anything changed.
+        Ids nested inside another mover travel with it and are ignored.
+        Returns False — and emits nothing — if the move is invalid (unknown
+        parent, anchor not a child of the parent or itself a mover, cycle)
+        or changes nothing.
         """
         _vlog(f"[M] move_items ids={item_ids} parent={new_parent_id} before={before_id}")
-        nodes = [self.find_item(i) for i in item_ids]
-        nodes = [n for n in nodes if n is not None]
-        # Drop duplicates and nodes nested inside another mover
+        nodes = [n for n in (self.find_item(i) for i in item_ids) if n is not None]
         movers: list[Node] = []
         for n in nodes:
             if any(n is m for m in movers):
@@ -606,196 +567,101 @@ class LayerOrderModel:
         if new_parent_id is not None and not isinstance(new_parent, GroupNode):
             return False
         if new_parent is not None and any(self._is_descendant(new_parent, m) for m in movers):
-            return False  # cycle
-        new_siblings = new_parent.children if new_parent is not None else self._root
-        if before_id is not None:
-            if any(m.id == before_id for m in movers):
-                return False
-            if not any(s.id == before_id for s in new_siblings):
-                return False
+            return False
+        new_siblings = self._siblings(new_parent)
+        if before_id is not None and (any(m.id == before_id for m in movers)
+                                      or not any(s.id == before_id for s in new_siblings)):
+            return False
 
         before = [(self.find_parent(m.id), self.get_index_in_parent(m.id)) for m in movers]
-
-        # Take every mover out of its current parent
         for m in movers:
-            parent = self.find_parent(m.id)
-            siblings = parent.children if parent is not None else self._root
-            for i, s in enumerate(siblings):
-                if s is m:
-                    siblings.pop(i)
-                    break
+            siblings = self._siblings(self.find_parent(m.id))
+            siblings.pop(next(i for i, s in enumerate(siblings) if s is m))
 
-        # Resolve the anchor AFTER removal — this is what keeps it correct
-        if before_id is None:
-            idx = len(new_siblings)
-        else:
-            idx = next(i for i, s in enumerate(new_siblings) if s.id == before_id)
+        idx = (len(new_siblings) if before_id is None
+               else next(i for i, s in enumerate(new_siblings) if s.id == before_id))
         new_siblings[idx:idx] = movers
 
-        after = [(new_parent, idx + k) for k in range(len(movers))]
-        if all(b[0] is a[0] and b[1] == a[1] for b, a in zip(before, after)):
-            return False  # nothing actually moved
-        self._emit(EVENT_ITEM_MOVED, {
+        if all(p is new_parent and i == idx + k for k, (p, i) in enumerate(before)):
+            return False
+        self._structure_changed(EVENT_ITEM_MOVED, {
             "item_ids": [m.id for m in movers],
-            "new_parent_id": new_parent.id if new_parent is not None else None,
+            "new_parent_id": new_parent.id if new_parent else None,
             "new_index": idx,
         })
-        self._emit(EVENT_ORDER_CHANGED, {})
         return True
 
-    def tree_order_key(self) -> dict:
-        """Return {node_id: pre-order position} for sorting ids in display order."""
-        order: dict = {}
-        def walk(node: Node) -> None:
-            order[node.id] = len(order)
-            if isinstance(node, GroupNode):
-                for ch in node.children:
-                    walk(ch)
-        for top in self._root:
-            walk(top)
-        return order
-
     def move_items_to_boundary(self, item_ids: list[str], to_top: bool) -> None:
-        """Move each item to the top (or bottom) of its respective parent.
-
-        Emits one ITEM_MOVED per item that actually moved, then a single
-        ORDER_CHANGED.
-
-        Sort order:
-        - to_top=True: sort by index DESCENDING (take from back first →
-          earliest selected ends up on top, preserving order)
-        - to_top=False: sort by index ASCENDING (take from front first →
-          earliest selected ends up at the front of the bottom block,
-          preserving order)
-        """
-        _vlog(f"[M] move_items_to_boundary")
-        # Snapshot current positions
-        moves: list[tuple[str, Optional[GroupNode], int]] = []
-        for item_id in item_ids:
+        """Move each item to the top (or bottom) of its own parent, keeping their order."""
+        _vlog("[M] move_items_to_boundary")
+        by_parent: dict = {}
+        for item_id, idx in sorted(((i, self.get_index_in_parent(i)) for i in item_ids
+                                    if self.get_index_in_parent(i) is not None),
+                                   key=lambda t: t[1]):
             parent = self.find_parent(item_id)
-            idx = self.get_index_in_parent(item_id)
-            if idx is not None:
-                moves.append((item_id, parent, idx))
-        # Sort: descending for to_top, ascending for to_bottom
-        if to_top:
-            moves.sort(key=lambda m: m[2], reverse=True)
-        else:
-            moves.sort(key=lambda m: m[2], reverse=False)
-        emitted_any = False
-        for item_id, parent, _old_idx in moves:
-            siblings = parent.children if parent is not None else self._root
-            # Find current index (may have shifted from earlier moves in same parent)
-            cur_idx = None
-            for i, sib in enumerate(siblings):
-                if sib.id == item_id:
-                    cur_idx = i
-                    break
-            if cur_idx is None:
-                continue
-            target_idx = 0 if to_top else len(siblings) - 1
-            if cur_idx == target_idx:
-                continue  # already at boundary
-            node = siblings.pop(cur_idx)
-            if to_top:
-                siblings.insert(0, node)
-                new_idx = 0
-            else:
-                siblings.append(node)
-                new_idx = len(siblings) - 1
-            self._emit(EVENT_ITEM_MOVED, {
-                "item_id": item_id,
-                "old_parent_id": parent.id if parent is not None else None,
-                "old_index": cur_idx,
-                "new_parent_id": parent.id if parent is not None else None,
-                "new_index": new_idx,
-            })
-            emitted_any = True
-        if emitted_any:
-            self._emit(EVENT_ORDER_CHANGED, {})
+            by_parent.setdefault(id(parent), (parent, []))[1].append(item_id)
+        moved = False
+        for parent, ids in by_parent.values():
+            siblings = self._siblings(parent)
+            before = [s.id for s in siblings]
+            picked = [s for s in siblings if s.id in ids]
+            rest = [s for s in siblings if s.id not in ids]
+            siblings[:] = picked + rest if to_top else rest + picked
+            moved |= [s.id for s in siblings] != before
+        if moved:
+            self._structure_changed(EVENT_ITEM_MOVED, {"item_ids": list(item_ids)})
 
     # ------------------------------------------------------------------
-    # Empty-group pruning
+    # Empty groups
     # ------------------------------------------------------------------
     def prune_empty_groups(self) -> int:
-        """Walk the tree and remove groups with no children. Returns count removed.
-
-        Emits GROUP_DELETED for each removed group + a single ORDER_CHANGED
-        if anything was removed.
-        """
-        _vlog(f"[M] prune_empty_groups")
-        return self._prune_empty_groups_internal()
-
-    def _prune_empty_groups_internal(self) -> int:
-        """Internal: prune without re-emitting ORDER_CHANGED (caller's job)."""
-        removed = 0
-
-        def walk(parent_children: list) -> None:
-            nonlocal removed
-            i = 0
-            while i < len(parent_children):
-                ch = parent_children[i]
-                if isinstance(ch, GroupNode):
-                    walk(ch.children)  # recurse first
-                    if len(ch.children) == 0:
-                        parent_children.pop(i)
-                        removed += 1
-                        self._emit(EVENT_GROUP_DELETED, {
-                            "group_id": ch.id,
-                            "unwrapped_children": [],  # was empty
-                        })
-                        continue
-                i += 1
-
-        walk(self._root)
+        """Remove every group without children (cascading). Returns the count."""
+        removed = self._prune_empty_groups_internal()
         if removed:
             self._emit(EVENT_ORDER_CHANGED, {})
         return removed
 
+    def _prune_empty_groups_internal(self) -> int:
+        removed = 0
+
+        def rec(children: list) -> None:
+            nonlocal removed
+            i = 0
+            while i < len(children):
+                ch = children[i]
+                if isinstance(ch, GroupNode):
+                    rec(ch.children)
+                    if not ch.children:
+                        children.pop(i)
+                        removed += 1
+                        self._emit(EVENT_GROUP_DELETED, {"group_id": ch.id, "unwrapped_children": []})
+                        continue
+                i += 1
+
+        rec(self._root)
+        return removed
+
     # ------------------------------------------------------------------
-    # Serialization
+    # Persistence
     # ------------------------------------------------------------------
     def serialize(self) -> str:
-        """Serialize the tree to JSON with schema version."""
-        _vlog(f"[M] serialize")
-        def ser_node(node: Node) -> dict:
+        """The document as versioned JSON (no mirrored QGIS state)."""
+        def ser(node: Node) -> dict:
             if isinstance(node, GroupNode):
-                return {
-                    "type": TYPE_GROUP,
-                    "id": node.id,
-                    "name": node.name,
-                    "expanded": node.expanded,
-                    "children": [ser_node(ch) for ch in node.children],
-                }
-            return {
-                "type": TYPE_LAYER,
-                "id": node.id,
-                "name": node.name,
-                "visible": node.visible,
-            }
-
-        return json.dumps(
-            {
-                "version": TREE_JSON_SCHEMA_VERSION,
-                "children": [ser_node(top) for top in self._root],
-            },
-            ensure_ascii=False,
-        )
+                return {"type": TYPE_GROUP, "id": node.id, "name": node.name,
+                        "expanded": node.expanded, "children": [ser(c) for c in node.children]}
+            return {"type": TYPE_LAYER, "id": node.id, "name": node.name}
+        return json.dumps({"version": TREE_JSON_SCHEMA_VERSION,
+                           "children": [ser(n) for n in self._root]}, ensure_ascii=False)
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Helpers
     # ------------------------------------------------------------------
     def _is_descendant(self, candidate: Optional[Node], ancestor: Optional[Node]) -> bool:
-        """Return True if `candidate` is `ancestor` itself or any descendant of `ancestor`.
-
-        Walks DOWN from `ancestor` looking for `candidate`.
-        """
+        """True if `candidate` is `ancestor` or lies anywhere below it."""
         if candidate is None or ancestor is None:
             return False
         if candidate is ancestor:
             return True
-        if not isinstance(ancestor, GroupNode):
-            return False
-        for ch in ancestor.children:
-            if self._is_descendant(candidate, ch):
-                return True
-        return False
+        return isinstance(ancestor, GroupNode) and any(
+            self._is_descendant(candidate, ch) for ch in ancestor.children)

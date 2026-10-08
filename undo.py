@@ -1,29 +1,28 @@
-"""Undo command for Layer Order Plus tree state changes.
+"""Undo command for Layer Order Plus document edits.
 
-A single TreeStateCommand captures before/after JSON snapshots of the
-ViewController's tree. undo() and redo() both call back into the VC's
-apply-tree-state-from-undo path, which rebuilds the tree and forces a
-custom-layer-order apply.
+A TreeStateCommand holds the document JSON before and after one user
+action. Undo/redo restore it through Model.restore_structure(), which keeps
+the current layer set and QGIS-mirrored state, so undo can never resurrect a
+deleted layer or drop one QGIS still has.
 """
 from qgis.PyQt.QtGui import QUndoCommand
 
 
 class TreeStateCommand(QUndoCommand):
-    def __init__(self, view_controller, before_json: str, after_json: str, text: str):
+    def __init__(self, model, before_json: str, after_json: str, text: str):
         super().__init__(text)
-        self._vc = view_controller
+        self._model = model
         self._before = before_json
         self._after = after_json
-        # QUndoStack.push() calls redo() right away, but the ViewController
-        # pushes AFTER it already applied the change — reloading the same
-        # state again would rebuild the View and re-apply to QGIS for nothing.
-        self._skip_first_redo = True
+        # QUndoStack.push() calls redo() immediately, but the edit has
+        # already been applied when the command is pushed.
+        self._applied = True
 
     def undo(self):
-        self._vc._apply_tree_state_from_undo(self._before)
+        self._model.restore_structure(self._before)
 
     def redo(self):
-        if self._skip_first_redo:
-            self._skip_first_redo = False
+        if self._applied:
+            self._applied = False
             return
-        self._vc._apply_tree_state_from_undo(self._after)
+        self._model.restore_structure(self._after)

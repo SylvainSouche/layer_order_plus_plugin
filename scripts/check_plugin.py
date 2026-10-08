@@ -93,7 +93,6 @@ def check_python_syntax() -> None:
 
 
 def check_qt6_patterns() -> None:
-    # Check every .py module (1.0.26 refactor split dock.py into multiple modules)
     py_files = sorted(ROOT.glob("*.py"))
     for path in py_files:
         text = path.read_text(encoding="utf-8")
@@ -107,26 +106,18 @@ def check_qt6_patterns() -> None:
             err(f"{path.name}: use Qt.DockWidgetArea.LeftDockWidgetArea")
         if "Qt.UserRole" in text and "ItemDataRole" not in text:
             warn(f"{path.name}: Qt.UserRole without ItemDataRole")
-    dock = ROOT / "dock.py"
-    if dock.is_file():
-        t = dock.read_text(encoding="utf-8")
-        if "QUndoCommand" in t and "QtGui" in t:
-            ok("dock.py: QUndo* via QtGui")
-        if "ItemDataRole" in t:
-            ok("dock.py: ItemDataRole used")
-        if "_icon_group" in t and "_icon_for_layer" in t:
-            ok("dock.py: icon helpers present")
 
 
 def check_required_files() -> None:
     # Core files always required
-    for name in ("__init__.py", "plugin.py", "dock.py", "metadata.txt", "VERSION", "LICENSE"):
+    for name in ("__init__.py", "plugin.py", "metadata.txt", "VERSION", "LICENSE"):
         if (ROOT / name).is_file():
             ok(f"file {name}")
         else:
             err(f"missing required file: {name}")
     # Refactored modules (1.0.26+)
-    for name in ("tree_utils.py", "icons.py", "tree_widget.py", "undo.py"):
+    for name in ("model.py", "view.py", "view_controller.py", "controller.py", "reconcile.py",
+                 "tree_utils.py", "icons.py", "tree_widget.py", "undo.py", "logger.py"):
         if (ROOT / name).is_file():
             ok(f"file {name}")
         else:
