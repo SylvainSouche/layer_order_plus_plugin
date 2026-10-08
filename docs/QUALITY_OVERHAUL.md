@@ -1,3 +1,7 @@
+> **Historical document** — the review and plan that led to 1.1.0. The
+> current design is described in [`ARCHITECTURE.md`](ARCHITECTURE.md);
+> later changes are in the `changelog` of `metadata.txt`.
+
 ## Status as of 1.1.0
 
 All Phase 1, Phase 2, Phase 3, and Phase 4 items in scope of the 1.1.0 release are **DONE**.
