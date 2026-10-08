@@ -217,7 +217,12 @@ class BetterLayerOrderPlugin(QObject):
         finally:
             self._loading = False
             self.controller.set_apply_suspended(False)
-            self.controller.request_apply()
+            # Force-apply Plus's order to QGIS immediately (not debounced).
+            # This ensures the native Layer Order panel matches Plus from
+            # the start, instead of showing a stale order from a previous
+            # session.
+            if self.view.is_control_enabled():
+                self.controller._apply_now_force()
 
     # ==================================================================
     # Project I/O (tree JSON persistence)
