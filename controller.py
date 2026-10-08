@@ -63,6 +63,14 @@ class LayerOrderController(QObject):
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
         self._apply_timer.timeout.connect(self._apply_now)
+        # The stock Layer Order panel changes the order in two steps per drag
+        # (insert at new row → layer briefly listed twice, then remove old
+        # row). Reconcile once, on the final state, on the next loop turn.
+        self._reconcile_timer = QTimer(self)
+        self._reconcile_timer.setSingleShot(True)
+        self._reconcile_timer.setInterval(0)
+        self._reconcile_timer.timeout.connect(self._reconcile_pending)
+        self._dragged_hint = set()  # layer ids seen duplicated in the intermediate state
 
         # Layer rename + visibility connections (layer_id → (layer, slot) or (ltl, slot))
         self._layer_rename_connections = {}
@@ -160,24 +168,23 @@ class LayerOrderController(QObject):
             elif not our_order_ids and qgis_order_ids:
                 # Plus is empty — pull from QGIS
                 _log("[C] _on_has_custom_order_changed: pulling from customLayerOrder")
-                self._reconcile_order_with_qgis(qgis_order_ids)
+                from .model import LayerNode
+                self._vc.replace_root_from_external(
+                    [LayerNode(id=lyr.id(), name=lyr.name()) for lyr in root.customLayerOrder()])
 
     def _on_custom_order_changed(self):
         _vlog_method("_on_custom_order_changed", "[C]")
-        """Stock Layer Order panel moved a layer → update Model.
+        """QGIS custom order changed (stock Layer Order panel) → schedule a reconcile.
 
         Guards:
-        - Skip if we're already reconciling (prevents feedback loop).
-        - Skip if we're applying (our own _apply_custom_order triggers this
-          signal synchronously — we must not reconcile our own changes).
-          A counter was used before, but QGIS doesn't emit the signal when
-          the order is unchanged, so the counter leaked and later swallowed
-          genuine external changes.
-        - Skip if a Plus change is still waiting to be applied (debounce
-          timer active): QGIS's order is stale and reconciling would revert
-          the user's drag.
-        - Skip if layers are being added/removed.
-        - Skip if the layer SETS differ (add/remove, not reorder).
+        - Skip our own writes (_applying: QGIS emits synchronously from
+          setCustomLayerOrder).
+        - Skip while a Plus change is waiting in the debounce timer: QGIS's
+          order is stale and reconciling would revert the user's edit.
+        - Skip during layer add/remove.
+        The actual reconcile is deferred (see _reconcile_timer) so the stock
+        panel's intermediate "layer listed twice" state is never used as a
+        target — it is only used as a hint of which layer was dragged.
         """
         if not self._view.is_control_enabled():
             return
@@ -191,6 +198,22 @@ class LayerOrderController(QObject):
             return
         if self._in_layer_add_remove:
             return
+        try:
+            ids = [lyr.id() for lyr in QgsProject.instance().layerTreeRoot().customLayerOrder()]
+        except Exception:
+            return
+        seen = set()
+        for lid in ids:
+            if lid in seen:
+                self._dragged_hint.add(lid)
+            seen.add(lid)
+        self._reconcile_timer.start()
+
+    def _reconcile_pending(self):
+        _vlog_method("_reconcile_pending", "[C]")
+        hint, self._dragged_hint = self._dragged_hint, set()
+        if not self._view.is_control_enabled() or self._applying or self._apply_timer.isActive():
+            return
         self._in_reconcile = True
         try:
             root = QgsProject.instance().layerTreeRoot()
@@ -198,191 +221,29 @@ class LayerOrderController(QObject):
             our_order = self._vc.get_flattened_layer_ids()
             if qgis_order == our_order:
                 return
-            # Only reconcile if the layer SETS are the same (same layers,
-            # different order). If layer sets differ, it's an add/remove,
-            # not a reorder — let on_layers_added/removed handle it.
-            if set(qgis_order) != set(our_order):
-                _log("_on_custom_order_changed: layer sets differ (add/remove) — skipping reconcile")
+            if len(set(qgis_order)) != len(qgis_order) or set(qgis_order) != set(our_order):
+                # Not a pure reorder (add/remove in progress, or still an
+                # intermediate state) — on_layers_added/removed handle sets
+                _log("[C] _reconcile_pending: QGIS order is not a reorder of Plus — skipping")
                 return
-            _log(f"[C] _on_custom_order_changed: QGIS order differs from Plus — reconciling")
-            self._reconcile_order_with_qgis(qgis_order)
+            self._reconcile_order_with_qgis(qgis_order, hint)
         except Exception as e:
-            _log(f"[C] _on_custom_order_changed FAILED: {e!r}", Qgis.Critical)
+            _log(f"[C] _reconcile_pending FAILED: {e!r}", Qgis.Critical)
+            _log(traceback.format_exc(), Qgis.Critical)
         finally:
             self._in_reconcile = False
 
-    def _reconcile_order_with_qgis(self, qgis_order):
+    def _reconcile_order_with_qgis(self, qgis_order, moved_hint=()):
         _vlog_method("_reconcile_order_with_qgis", "[C]")
-        """Reconcile the Model's tree to match QGIS's flat order.
-
-        RECURSIVE CONTIGUITY ALGORITHM (1.2.16):
-
-        The tree is rebuilt recursively from the flat order + existing
-        group structure. At each level:
-
-        1. Walk the flat order slice for this level.
-        2. For each existing child group at this level, find the min/max
-           position of its DIRECT leaf children (not nested) in the flat
-           order. This defines the group's "span" at this level.
-        3. Layers between a group's min and max → belong to that group.
-        4. Layers outside any group's span → stay at this level.
-        5. Recurse into each group to rebuild its children.
-
-        Key insight: we use DIRECT children (not all descendants) to
-        compute spans. This respects nesting: a parent group's span is
-        determined by its top-level children (which include subgroups),
-        not by deeply nested layers.
-
-        Rules (from user):
-        1. Moving layers within a group → reorder leaves, group untouched.
-        2. Moving a layer adjacent to a group → sibling, NOT a child.
-        3. Moving a layer between a group's children → becomes part of group.
-        4. Moving a layer out from between group's children → leaves the group.
-        5. Empty groups preserved (reorder is not a delete).
-        6. No warning popup — automatic, non-destructive.
-        """
-        from .model import GroupNode, LayerNode
-        model = self._vc._model
-
-        _log(f"[C] _reconcile: qgis_order={qgis_order}")
-        _log(f"[C] _reconcile: before, our_order={self._vc.get_flattened_layer_ids()}")
-
-        # Collect group metadata (id → (name, expanded)) and layer visibility
-        # for preservation
-        group_meta = {}
-        visibility = {}
-        def collect_meta(node):
-            if isinstance(node, GroupNode):
-                group_meta[node.id] = (node.name, node.expanded)
-                for ch in node.children:
-                    collect_meta(ch)
-            else:
-                visibility[node.id] = node.visible
-        for top in model.get_root():
-            collect_meta(top)
-
-        # Get layer names from QGIS
-        proj = QgsProject.instance()
-        layer_names = {}
-        for lid in qgis_order:
-            lyr = proj.mapLayer(lid)
-            layer_names[lid] = lyr.name() if lyr else lid
-
-        # Recursive rebuild
-        new_root = self._rebuild_level(
-            qgis_order, 0, len(qgis_order),
-            model.get_root(), group_meta, layer_names
-        )
-
-        def restore_visibility(nodes):
-            for n in nodes:
-                if isinstance(n, GroupNode):
-                    restore_visibility(n.children)
-                else:
-                    n.visible = visibility.get(n.id, True)
-        restore_visibility(new_root)
-
+        """Rebuild the Model's tree to match QGIS's flat order (see reconcile.py)."""
+        from .reconcile import reconcile_tree
+        _log(f"[C] _reconcile: qgis_order={qgis_order} hint={sorted(moved_hint)}")
+        new_root = reconcile_tree(self._model.get_root(), qgis_order, moved_hint)
+        if new_root is None:
+            _log("[C] _reconcile: not a permutation of the Plus layers — skipped", Qgis.Warning)
+            return
         self._vc.replace_root_from_external(new_root)
         _log(f"[C] _reconcile: after, our_order={self._vc.get_flattened_layer_ids()}")
-
-    def _rebuild_level(self, qgis_order, start, end, current_children,
-                       group_meta, layer_names):
-        """Rebuild one level of the tree from qgis_order[start:end].
-
-        current_children: the current children at this level (from the old tree).
-        Returns a list of LayerNode / GroupNode for this level.
-
-        For each existing group at this level, we compute its span based on
-        ALL its direct children (both layers and subgroups). For subgroups,
-        we compute their span first (recursively), so the parent's span
-        correctly covers the subgroup's entire block.
-        """
-        from .model import GroupNode, LayerNode
-
-        # Step 1: compute spans for all groups at this level.
-        # A group's span is [min, max] of all its direct children's positions.
-        # For direct LayerNode children → their position in qgis_order.
-        # For direct GroupNode children → we need their span first (recurse
-        # to compute it). We do this bottom-up: process innermost groups first.
-
-        # Collect groups at this level
-        groups_here = [child for child in current_children if isinstance(child, GroupNode)]
-
-        # For each group, collect the positions of its DIRECT children
-        # (both layers and subgroups). For subgroups, recursively compute
-        # their span first.
-        group_spans = {}  # group_id → (min_pos, max_pos)
-
-        def compute_group_span(group_node):
-            """Compute the span of a group based on its direct children.
-            Recursively computes subgroup spans first."""
-            positions = []
-            for ch in group_node.children:
-                if isinstance(ch, LayerNode):
-                    if ch.id in qgis_order:
-                        pos = qgis_order.index(ch.id)
-                        if start <= pos < end:
-                            positions.append(pos)
-                elif isinstance(ch, GroupNode):
-                    # Recursively compute subgroup's span
-                    sub_span = compute_group_span(ch)
-                    if sub_span is not None:
-                        positions.extend(sub_span)
-            if positions:
-                return (min(positions), max(positions))
-            return None
-
-        for grp in groups_here:
-            span = compute_group_span(grp)
-            if span is not None:
-                group_spans[grp.id] = span
-
-        # Step 2: walk qgis_order[start:end] and assign each layer to a group
-        # or to this level. Sort groups by min position so we process them
-        # in order (groups at the same level don't overlap).
-        sorted_groups = sorted(group_spans.items(), key=lambda x: x[1][0])
-
-        result = []
-        i = start
-        while i < end:
-            lid = qgis_order[i]
-            # Find which group (at this level) this layer belongs to
-            assigned_group = None
-            for gid, (gmin, gmax) in sorted_groups:
-                if gmin <= i <= gmax:
-                    assigned_group = gid
-                    break
-
-            if assigned_group is None:
-                # This layer stays at the current level
-                result.append(LayerNode(id=lid, name=layer_names.get(lid, lid)))
-                i += 1
-            else:
-                # This layer is inside a group's span.
-                # Take everything from i to the group's max position.
-                gmin, gmax = group_spans[assigned_group]
-                group_end = gmax + 1  # exclusive
-
-                # Get the group's current children (for recursion)
-                old_group_node = None
-                for child in current_children:
-                    if isinstance(child, GroupNode) and child.id == assigned_group:
-                        old_group_node = child
-                        break
-
-                # Recurse: rebuild the group's children from the slice
-                old_children = old_group_node.children if old_group_node else []
-                new_children = self._rebuild_level(
-                    qgis_order, i, group_end,
-                    old_children, group_meta, layer_names
-                )
-
-                name, expanded = group_meta.get(assigned_group, ("Group", True))
-                result.append(GroupNode(id=assigned_group, name=name,
-                                        expanded=expanded, children=new_children))
-                i = group_end
-
-        return result
 
     def _on_tree_visibility_changed(self, node):
         _vlog_method("_on_tree_visibility_changed", "[C]")
