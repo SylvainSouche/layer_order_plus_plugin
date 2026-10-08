@@ -507,6 +507,9 @@ class LayerOrderModel:
 
         Emits ITEM_MOVED + ORDER_CHANGED. Prevents moving a group into its
         own descendant (no-op in that case). No-op if the position is unchanged.
+
+        If remove_empty_groups is True and the old parent group becomes empty
+        after the move, it is pruned automatically.
         """
         node = self.find_item(item_id)
         if node is None:
@@ -550,13 +553,22 @@ class LayerOrderModel:
             "new_index": new_index,
         })
         self._emit(EVENT_ORDER_CHANGED, {})
+        # Prune empty groups if the setting is on and the old parent is now empty
+        if self._remove_empty_groups and old_parent is not None and len(old_parent.children) == 0:
+            self._prune_empty_groups_internal()
 
     def move_items_to_boundary(self, item_ids: list[str], to_top: bool) -> None:
         """Move each item to the top (or bottom) of its respective parent.
 
         Emits one ITEM_MOVED per item that actually moved, then a single
-        ORDER_CHANGED. Items are processed in reverse-index order so the
-        take/insert doesn't shift indices under us.
+        ORDER_CHANGED.
+
+        Sort order:
+        - to_top=True: sort by index DESCENDING (take from back first →
+          earliest selected ends up on top, preserving order)
+        - to_top=False: sort by index ASCENDING (take from front first →
+          earliest selected ends up at the front of the bottom block,
+          preserving order)
         """
         # Snapshot current positions
         moves: list[tuple[str, Optional[GroupNode], int]] = []
@@ -565,8 +577,11 @@ class LayerOrderModel:
             idx = self.get_index_in_parent(item_id)
             if idx is not None:
                 moves.append((item_id, parent, idx))
-        # Sort by current index descending so we take from the back first
-        moves.sort(key=lambda m: m[2], reverse=True)
+        # Sort: descending for to_top, ascending for to_bottom
+        if to_top:
+            moves.sort(key=lambda m: m[2], reverse=True)
+        else:
+            moves.sort(key=lambda m: m[2], reverse=False)
         emitted_any = False
         for item_id, parent, _old_idx in moves:
             siblings = parent.children if parent is not None else self._root
