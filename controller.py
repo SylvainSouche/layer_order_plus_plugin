@@ -237,7 +237,10 @@ class LayerOrderController(QObject):
         # This handles both top-level reordering AND within-group reordering
         # (e.g., when two layers within the same group are swapped in the
         # native panel).
+        _log(f"_reconcile: qgis_order={qgis_order}")
+        _log(f"_reconcile: before reorder, our_order={self._vc.get_flattened_layer_ids()}")
         self._reorder_all_levels_to_match_qgis(qgis_order)
+        _log(f"_reconcile: after reorder, our_order={self._vc.get_flattened_layer_ids()}")
 
     def _find_conflicting_groups(self, qgis_order):
         """Return list of group_ids whose layers are NOT contiguous in qgis_order.
@@ -267,7 +270,10 @@ class LayerOrderController(QObject):
                     positions = [qgis_order.index(lid) for lid in group_layer_ids
                                  if lid in qgis_order]
                     if positions:
-                        if max(positions) - min(positions) + 1 != len(positions):
+                        is_contiguous = (max(positions) - min(positions) + 1 == len(positions))
+                        _log(f"  group '{node.name}': layers at positions {positions} "
+                             f"→ {'contiguous' if is_contiguous else 'NON-CONTIGUOUS (conflicting)'}")
+                        if not is_contiguous:
                             conflicting.append(node.id)
                 for ch in node.children:
                     walk_groups(ch)
