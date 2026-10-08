@@ -28,7 +28,7 @@ try:
     from .logger import _vlog, _vlog_method
 except ImportError:
     def _vlog(msg): pass
-    def _vlog_method(name): pass
+    def _vlog_method(name, tag=""): pass
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional, Union
 
@@ -281,6 +281,7 @@ class LayerOrderModel:
         is emitted (so listeners can rebuild an empty tree). This prevents
         a corrupted project entry from crashing the plugin on load.
         """
+        _vlog(f"[M] load_from_json")
         new_root: list[Node] = []
         if raw_json:
             try:
@@ -323,6 +324,7 @@ class LayerOrderModel:
 
     def clear(self) -> None:
         """Empty the tree. Emits MODEL_LOADED + ORDER_CHANGED."""
+        _vlog(f"[M] clear")
         self._root = []
         self._emit(EVENT_MODEL_LOADED, {})
         self._emit(EVENT_ORDER_CHANGED, {})
@@ -331,6 +333,7 @@ class LayerOrderModel:
     # Layer mutations
     # ------------------------------------------------------------------
     def add_layer(self, layer_id: str, name: str, visible: bool = True,
+        _vlog(f"[M] add_layer")
                   parent_id: Optional[str] = None,
                   index: Optional[int] = None) -> None:
         """Add a LayerNode under `parent_id` (or top-level if None) at `index`.
@@ -365,6 +368,7 @@ class LayerOrderModel:
         as a result is also removed (and GROUP_DELETED events are emitted
         for each, in deepest-first order).
         """
+        _vlog(f"[M] remove_layer")
         parent = self.find_parent(layer_id)
         siblings = parent.children if parent is not None else self._root
         for i, sib in enumerate(siblings):
@@ -379,6 +383,7 @@ class LayerOrderModel:
 
     def rename_layer(self, layer_id: str, new_name: str) -> None:
         """Update a layer's display name. Emits LAYER_RENAMED (no ORDER_CHANGED — display only)."""
+        _vlog(f"[M] rename_layer")
         node = self.find_item(layer_id)
         if not isinstance(node, LayerNode):
             return
@@ -394,6 +399,7 @@ class LayerOrderModel:
 
     def set_visibility(self, layer_id: str, visible: bool) -> None:
         """Toggle a layer's visibility flag. Emits VISIBILITY_CHANGED (no ORDER_CHANGED)."""
+        _vlog(f"[M] set_visibility")
         node = self.find_item(layer_id)
         if not isinstance(node, LayerNode):
             return
@@ -410,6 +416,7 @@ class LayerOrderModel:
     # Group mutations
     # ------------------------------------------------------------------
     def create_group(self, name: str, parent_id: Optional[str] = None,
+        _vlog(f"[M] create_group")
                      index: Optional[int] = None) -> str:
         """Create a GroupNode. Returns the new group_id.
 
@@ -443,6 +450,7 @@ class LayerOrderModel:
         payload's `unwrapped_children` lists the children that were promoted
         (with their new parent_id + index).
         """
+        _vlog(f"[M] delete_group")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -471,6 +479,7 @@ class LayerOrderModel:
 
     def rename_group(self, group_id: str, new_name: str) -> None:
         """Update a group's display name. Emits GROUP_RENAMED (no ORDER_CHANGED)."""
+        _vlog(f"[M] rename_group")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -486,6 +495,7 @@ class LayerOrderModel:
 
     def set_expanded(self, group_id: str, expanded: bool) -> None:
         """Toggle a group's expanded flag. Emits EXPANDED_CHANGED (no ORDER_CHANGED)."""
+        _vlog(f"[M] set_expanded")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -502,6 +512,7 @@ class LayerOrderModel:
     # Move operations
     # ------------------------------------------------------------------
     def move_item(self, item_id: str, new_parent_id: Optional[str],
+        _vlog(f"[M] move_item")
                   new_index: int) -> None:
         """Move a node to `new_parent_id` (None = top-level) at `new_index`.
 
@@ -570,6 +581,7 @@ class LayerOrderModel:
           earliest selected ends up at the front of the bottom block,
           preserving order)
         """
+        _vlog(f"[M] move_items_to_boundary")
         # Snapshot current positions
         moves: list[tuple[str, Optional[GroupNode], int]] = []
         for item_id in item_ids:
@@ -623,6 +635,7 @@ class LayerOrderModel:
         Emits GROUP_DELETED for each removed group + a single ORDER_CHANGED
         if anything was removed.
         """
+        _vlog(f"[M] prune_empty_groups")
         return self._prune_empty_groups_internal()
 
     def _prune_empty_groups_internal(self) -> int:

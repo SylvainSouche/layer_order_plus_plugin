@@ -98,7 +98,7 @@ class LayerOrderView(QDockWidget):
     # UI construction
     # ==================================================================
     def _build_ui(self):
-        _vlog_method("_build_ui")
+        _vlog_method("_build_ui", "[V]")
         rootw = QWidget()
         self.setWidget(rootw)
         lay = QVBoxLayout(rootw)
@@ -198,7 +198,7 @@ class LayerOrderView(QDockWidget):
         self._shortcuts[2].activated.connect(self.redo_shortcut_activated)
 
     def _connect_signals(self):
-        _vlog_method("_connect_signals")
+        _vlog_method("_connect_signals", "[V]")
         self.btn_add_group.clicked.connect(self.create_group_requested.emit)
         self.btn_rename_group.clicked.connect(self.rename_group_requested.emit)
         self.btn_del_group.clicked.connect(self.delete_group_requested.emit)
@@ -216,34 +216,34 @@ class LayerOrderView(QDockWidget):
     # Internal signal handlers (translate raw Qt signals to semantic ones)
     # ==================================================================
     def _on_control_toggled(self, checked):
-        _vlog_method("_on_control_toggled")
+        _vlog_method("_on_control_toggled", "[V]")
         if self._syncing:
             return
         self._apply_control_ui_state(checked)
         self.control_toggled.emit(checked)
 
     def _on_remove_empty_toggled(self, checked):
-        _vlog_method("_on_remove_empty_toggled")
+        _vlog_method("_on_remove_empty_toggled", "[V]")
         if self._syncing:
             return
         self.remove_empty_toggled.emit(checked)
 
     def _on_verbose_toggled(self, checked):
-        _vlog_method("_on_verbose_toggled")
+        _vlog_method("_on_verbose_toggled", "[V]")
         """Toggle verbose logging via the central logger module."""
         from .logger import set_verbose, _log
         set_verbose(bool(checked))
         _log(f"Verbose logging {'ON' if checked else 'OFF'}")
 
     def _on_item_double_clicked(self, item, column):
-        _vlog_method("_on_item_double_clicked")
+        _vlog_method("_on_item_double_clicked", "[V]")
         if self._syncing or item is None:
             return
         if item.data(0, ROLE_TYPE) == TYPE_GROUP:
             self.item_double_clicked.emit(item.data(0, ROLE_ID))
 
     def _on_item_changed(self, item, column):
-        _vlog_method("_on_item_changed")
+        _vlog_method("_on_item_changed", "[V]")
         """User toggled a checkbox — emit visibility signal.
 
         For layers: emit layer_visibility_toggled(layer_id, checked).
@@ -267,7 +267,7 @@ class LayerOrderView(QDockWidget):
             self.group_visibility_toggled.emit(gid, checked)
 
     def _on_context_menu(self, pos):
-        _vlog_method("_on_context_menu")
+        _vlog_method("_on_context_menu", "[V]")
         if not self.is_control_enabled():
             return
         menu = QMenu(self)
@@ -330,7 +330,7 @@ class LayerOrderView(QDockWidget):
         self._apply_control_ui_state(enabled)
 
     def _apply_control_ui_state(self, enabled: bool):
-        _vlog_method("_apply_control_ui_state")
+        _vlog_method("_apply_control_ui_state", "[V]")
         self.tree.setEnabled(enabled)
         self.btn_add_group.setEnabled(enabled)
         self.ed_filter.setEnabled(enabled)
@@ -381,7 +381,7 @@ class LayerOrderView(QDockWidget):
         return unique_group_name(self.tree, base)
 
     def _update_group_actions_enabled(self):
-        _vlog_method("_update_group_actions_enabled")
+        _vlog_method("_update_group_actions_enabled", "[V]")
         groups = self.get_selected_group_ids()
         n = len(groups)
         self.btn_rename_group.setEnabled(n == 1 and self.is_control_enabled())
@@ -447,7 +447,7 @@ class LayerOrderView(QDockWidget):
             self._syncing = False
 
     def _build_tree_item(self, node, parent_item, expand_targets, layer_icon_provider):
-        _vlog_method("_build_tree_item")
+        _vlog_method("_build_tree_item", "[V]")
         """Recursively build a QTreeWidgetItem from a node dict."""
         if node["type"] == TYPE_GROUP:
             it = QTreeWidgetItem([node.get("name", "Group")])

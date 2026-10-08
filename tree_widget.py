@@ -54,7 +54,7 @@ class BetterLayerTree(QTreeWidget):
     # event helpers
     # ------------------------------------------------------------------
     def _event_pos_point(self, e: QDropEvent):
-        _vlog_method("_event_pos_point")
+        _vlog_method("_event_pos_point", "[TW]")
         return e.position().toPoint() if hasattr(e, "position") else e.pos()
 
     def _is_ancestor(self, anc: QTreeWidgetItem, node: QTreeWidgetItem) -> bool:
@@ -119,7 +119,7 @@ class BetterLayerTree(QTreeWidget):
         # Emit the semantic intent — ViewController will translate to Model mutations
         moving_item_ids = [it.data(0, ROLE_ID) for it in moving]
         target_id = target.data(0, ROLE_ID)
-        _vlog(f"drop_intent: moving={moving_item_ids} target={target_id} pos={position}")
+        _vlog(f"[TW] drop_intent: moving={moving_item_ids} target={target_id} pos={position}")
         self.drop_intent.emit(moving_item_ids, target_id, position)
 
         # CRITICAL: set the drop action to IgnoreAction so Qt's QTreeWidget
