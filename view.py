@@ -5,39 +5,35 @@ Contract
 * **Out**: every user action leaves the View as an intent signal that
   carries everything needed to act on it (ids, target, flag). The View
   never decides what an action means and never changes what it displays
-  in response to its own input: a click on a checkbox, a branch arrow or a
-  settings box is reverted/ignored locally and only reported.
+  in response to its own input: drops, checkbox clicks, branch arrows and
+  settings boxes are only reported.
 * **In**: the ViewController tells the View what to display through the
   ``render*`` methods. That is the only way displayed state changes.
 
 Pure presentation state stays here: selection, scroll position,
-enabled/disabled look. The View knows nothing of the Model, QGIS,
-or undo.
+enabled/disabled look. The View knows nothing of the Model, QGIS, or undo.
+
+Parts: ``LayerOrderItemModel`` (tree_model.py) presents the rendered tree
+and turns drops / checkbox clicks into intents; ``LayerOrderTree``
+(tree_view.py) displays it and reports expand/collapse.
 """
 
 from qgis.PyQt.QtCore import QItemSelectionModel, QSize, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
-    QAbstractItemView,
     QCheckBox,
     QDockWidget,
     QHBoxLayout,
     QInputDialog,
     QMenu,
     QPushButton,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from .icons import icon_add_group, icon_group, icon_remove_group, icon_rename_group
-from .tree_utils import (
-    ROLE_ID,
-    ROLE_TYPE,
-    TYPE_GROUP,
-    find_group_item,
-    find_layer_item,
-)
-from .tree_widget import LayerOrderTree
+from .icons import icon_add_group, icon_remove_group, icon_rename_group
+from .model import TYPE_GROUP
+from .tree_model import ROLE_ID, ROLE_TYPE, LayerOrderItemModel
+from .tree_view import LayerOrderTree
 
 _TREE_TOOLTIP = (
     "Drag layers and groups to set draw order (top of tree = drawn on top).\n\n"
@@ -71,6 +67,7 @@ class LayerOrderView(QDockWidget):
 
     def __init__(self, parent=None):
         super().__init__("Layer Order Plus", parent)
+        self.item_model = LayerOrderItemModel(self)
         self._build_ui()
         self._connect_signals()
 
@@ -101,17 +98,9 @@ class LayerOrderView(QDockWidget):
         head.addStretch(1)
 
         self.tree = LayerOrderTree()
-        self.tree.setHeaderHidden(True)
+        self.tree.setModel(self.item_model)
         self.tree.setToolTip(_TREE_TOOLTIP)
-        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.tree.setDragEnabled(True)
-        self.tree.setAcceptDrops(True)
-        self.tree.setDropIndicatorShown(True)
-        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.tree.setIconSize(QSize(16, 16))
-        self.tree.setUniformRowHeights(True)
-        self.tree.setRootIsDecorated(True)
-        self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lay.addWidget(self.tree)
 
@@ -143,10 +132,10 @@ class LayerOrderView(QDockWidget):
         self._report_only(self.chk_remove_empty, self.remove_empty_toggled)
         self._report_only(self.chk_verbose, self.verbose_toggled)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
-        self.tree.itemSelectionChanged.connect(self._update_group_buttons)
-        self.tree.drop_intent.connect(self.drop_requested)
+        self.tree.selectionModel().selectionChanged.connect(self._update_group_buttons)
         self.tree.expand_intent.connect(lambda gid, on: self.expand_requested.emit([gid], on))
-        self.tree.check_intent.connect(self.check_requested)
+        self.item_model.drop_intent.connect(self.drop_requested)
+        self.item_model.check_intent.connect(self.check_requested)
 
     @staticmethod
     def _report_only(box: QCheckBox, intent):
@@ -164,18 +153,29 @@ class LayerOrderView(QDockWidget):
     # ==================================================================
     def selected_ids(self) -> list[str]:
         """Selected items without a selected ancestor, in display order."""
-        return [it.data(0, ROLE_ID) for it in self.tree.moving_items()]
+        selected = {ix.data(ROLE_ID): ix for ix in self.tree.selectionModel().selectedIndexes()}
+
+        def has_selected_ancestor(ix):
+            p = ix.parent()
+            while p.isValid():
+                if p.data(ROLE_ID) in selected:
+                    return True
+                p = p.parent()
+            return False
+
+        top = {i for i, ix in selected.items() if not has_selected_ancestor(ix)}
+        return [i for i in self.item_model.nodes_in_order() if i in top]
 
     def selected_group_ids(self) -> list[str]:
-        return [it.data(0, ROLE_ID) for it in self.tree.selectedItems()
-                if it.data(0, ROLE_TYPE) == TYPE_GROUP]
+        return [ix.data(ROLE_ID) for ix in self.tree.selectionModel().selectedIndexes()
+                if ix.data(ROLE_TYPE) == TYPE_GROUP]
 
     def _request_rename(self):
         groups = self.selected_group_ids()
         if len(groups) == 1:
             self.rename_group_requested.emit(groups[0])
 
-    def _update_group_buttons(self):
+    def _update_group_buttons(self, *_args):
         n = len(self.selected_group_ids())
         enabled = self.chk_control.isChecked()
         self.btn_rename_group.setEnabled(enabled and n == 1)
@@ -184,11 +184,10 @@ class LayerOrderView(QDockWidget):
     def _on_context_menu(self, pos):
         if not self.chk_control.isChecked():
             return
-        under = self.tree.itemAt(pos)
-        if under is not None and not under.isSelected():
-            self.tree.clearSelection()
-            under.setSelected(True)
-            self.tree.setCurrentItem(under)
+        under = self.tree.indexAt(pos)
+        selection = self.tree.selectionModel()
+        if under.isValid() and not selection.isSelected(under):
+            self.tree.setCurrentIndex(under)   # selects it alone
         ids = self.selected_ids()
         groups = self.selected_group_ids()
 
@@ -237,98 +236,47 @@ class LayerOrderView(QDockWidget):
     # Rendering (ViewController → View)
     # ==================================================================
     def render(self, nodes: list[dict]):
-        """Rebuild the tree from node dicts, keeping scroll position.
+        """Show a tree of node dicts.
 
         Group: {"type": "group", "id", "name", "expanded", "children"}
         Layer: {"type": "layer", "id", "name", "visible", "icon"}
         """
-        tree = self.tree
-        scroll = tree.verticalScrollBar().value()
-        tree.blockSignals(True)
-        try:
-            tree.clear()
-            for node in nodes:
-                self._build_item(node, None)
-            tree.doItemsLayout()  # so the scroll range is up to date
-            tree.verticalScrollBar().setValue(scroll)
-        finally:
-            tree.blockSignals(False)
+        scroll = self.tree.verticalScrollBar().value()
+        self.item_model.render(nodes)
+
+        def expand(ns):
+            for n in ns:
+                if n["type"] == TYPE_GROUP:
+                    self.tree.setExpanded(self.item_model.index_of(n["id"]), bool(n.get("expanded", True)))
+                    expand(n.get("children", []))
+        expand(nodes)
+        self.tree.verticalScrollBar().setValue(scroll)
         self._update_group_buttons()
 
-    def _build_item(self, node: dict, parent: QTreeWidgetItem | None) -> QTreeWidgetItem:
-        it = QTreeWidgetItem([node.get("name", "")])
-        it.setData(0, ROLE_TYPE, node["type"])
-        it.setData(0, ROLE_ID, node["id"])
-        it.setFlags((it.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
-        if parent is None:
-            self.tree.addTopLevelItem(it)
-        else:
-            parent.addChild(it)
-        if node["type"] == TYPE_GROUP:
-            it.setIcon(0, icon_group())
-            for ch in node.get("children", []):
-                self._build_item(ch, it)
-            it.setExpanded(bool(node.get("expanded", True)))
-            it.setCheckState(0, self._group_state(it))
-        else:
-            icon = node.get("icon")
-            if icon is not None and not icon.isNull():
-                it.setIcon(0, icon)
-            it.setCheckState(0, Qt.CheckState.Checked if node.get("visible", True)
-                             else Qt.CheckState.Unchecked)
-        return it
-
-    @staticmethod
-    def _group_state(group: QTreeWidgetItem) -> Qt.CheckState:
-        """Checked if every child is, Unchecked if none is, else PartiallyChecked."""
-        states = {group.child(i).checkState(0) for i in range(group.childCount())}
-        if not states or states == {Qt.CheckState.Checked}:
-            return Qt.CheckState.Checked
-        if states == {Qt.CheckState.Unchecked}:
-            return Qt.CheckState.Unchecked
-        return Qt.CheckState.PartiallyChecked
-
-    def _find(self, item_id: str) -> QTreeWidgetItem | None:
-        return find_group_item(self.tree, item_id) or find_layer_item(self.tree, item_id)
-
     def render_name(self, item_id: str, name: str):
-        it = self._find(item_id)
-        if it is not None:
-            it.setText(0, name)
+        self.item_model.set_name(item_id, name)
 
     def render_visibility(self, layer_id: str, visible: bool):
-        it = find_layer_item(self.tree, layer_id)
-        if it is None:
-            return
-        it.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
-        p = it.parent()
-        while p is not None:
-            p.setCheckState(0, self._group_state(p))
-            p = p.parent()
+        self.item_model.set_visible(layer_id, visible)
 
     def render_expanded(self, group_id: str, expanded: bool):
-        it = find_group_item(self.tree, group_id)
-        if it is not None:
-            it.setExpanded(expanded)
+        self.tree.setExpanded(self.item_model.index_of(group_id), expanded)
 
     def render_selection(self, item_ids: list[str]):
         """Select `item_ids`; the first becomes current and is scrolled to."""
-        self.tree.clearSelection()
-        first = None
-        for item_id in item_ids:
-            it = self._find(item_id)
-            if it is not None:
-                it.setSelected(True)
-                first = first or it
-        if first is not None:
-            self.tree.setCurrentItem(first, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
-            self.tree.scrollToItem(first)
+        selection = self.tree.selectionModel()
+        selection.clearSelection()
+        indexes = [ix for ix in map(self.item_model.index_of, item_ids) if ix.isValid()]
+        for ix in indexes:
+            selection.select(ix, QItemSelectionModel.SelectionFlag.Select)
+        if indexes:
+            selection.setCurrentIndex(indexes[0], QItemSelectionModel.SelectionFlag.NoUpdate)
+            self.tree.scrollTo(indexes[0])
 
     def render_control_enabled(self, enabled: bool):
         self.chk_control.setChecked(bool(enabled))
         for w in (self.tree, self.btn_add_group, self.chk_remove_empty):
             w.setEnabled(enabled)
-        self.tree.setStyleSheet("" if enabled else "QTreeWidget { color: palette(disabled); }")
         self._update_group_buttons()
 
     def render_remove_empty(self, checked: bool):

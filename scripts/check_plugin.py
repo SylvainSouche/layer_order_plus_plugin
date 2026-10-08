@@ -118,7 +118,7 @@ def check_required_files() -> None:
             err(f"missing required file: {name}")
     # Refactored modules (1.0.26+)
     for name in ("model.py", "view.py", "view_controller.py", "controller.py", "reconcile.py",
-                 "tree_utils.py", "icons.py", "tree_widget.py", "undo.py", "logger.py"):
+                 "tree_model.py", "tree_view.py", "icons.py", "undo.py", "logger.py"):
         if (ROOT / name).is_file():
             ok(f"file {name}")
         else:

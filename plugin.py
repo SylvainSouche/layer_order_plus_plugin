@@ -4,7 +4,8 @@ Architecture
 ------------
     model.py            LayerOrderModel   — the document; single source of truth (no Qt)
     view.py             LayerOrderView    — renders, emits intents (no logic)
-    tree_widget.py      LayerOrderTree   — tree that reports drop/expand/check intents
+    tree_model.py       LayerOrderItemModel — Qt item model of the View; drops/checks → intents
+    tree_view.py        LayerOrderTree    — QTreeView; expand/collapse → intents
     view_controller.py  ViewController    — intents → Model (+ undo), Model → View
     controller.py       LayerOrderController — QGIS ↔ Model
     reconcile.py        reconcile_tree    — infer groups from a flat QGIS order (pure)
