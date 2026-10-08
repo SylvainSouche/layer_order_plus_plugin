@@ -129,6 +129,10 @@ Dropping into a dragged item's own subtree is refused in
 a sibling id, not an index, so multi-item drops can't be thrown off by
 shifting indices.
 
+Move up / down (`Model.move_items_by_one`) is not a drop: each selected
+item swaps with the nearest unselected sibling in its own parent, so
+selected blocks move together and nothing ever leaves its group.
+
 ## Tests
 
 * `make test` — PyQt6 + pytest, no QGIS needed: Model, reconcile
@@ -139,5 +143,17 @@ shifting indices.
   (uses `$QGIS_APP` or the newest `/Applications/QGIS*.app`): the full
   user scenario, QGIS Layer Order panel drags with the event loop running
   between its two steps, the native panel's display after toggling
-  control, and plugin load/unload + keyboard undo.
+  control, a reopened project staying unmodified, and plugin load/unload
+  + keyboard undo.
 * `make lint` — ruff.
+
+## Packaging
+
+`make zip` builds `dist/layer_order_plus_qgis4-<VERSION>.zip` from an
+explicit whitelist (the `*.py` modules, `metadata.txt`, `LICENSE`,
+`icon.png`, `icons/*.svg`, `README.md`, `VERSION.md`,
+`docs/DOCUMENTATION.md`) staged under the fixed folder
+`layer_order_plus_plugin` — the plugin's identity in QGIS — with plain
+644/755 permissions. No dev files, hidden files or scripts, so the
+plugins.qgis.org upload scan (Bandit, detect-secrets, suspicious /
+executable / hidden files) has nothing to flag.

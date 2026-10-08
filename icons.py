@@ -34,6 +34,14 @@ def icon_rename_group() -> QIcon:
     return bundled_icon("rename_group.svg")
 
 
+def icon_move_up() -> QIcon:
+    return bundled_icon("move_up.svg")
+
+
+def icon_move_down() -> QIcon:
+    return bundled_icon("move_down.svg")
+
+
 def icon_for_layer(layer) -> QIcon:
     """QGIS's own icon for the layer type/geometry; generic icon if None."""
     if layer is not None:

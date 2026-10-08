@@ -58,9 +58,30 @@ def check_metadata(expected_version: str) -> None:
         return
 
     g = cp["general"]
-    for key in ("name", "qgisMinimumVersion", "description", "version", "author", "email"):
+    # Required by plugins.qgis.org (PyQGIS cookbook, plugin metadata table)
+    for key in ("name", "qgisMinimumVersion", "description", "about", "version",
+                "author", "email", "repository"):
         if key not in g or not str(g[key]).strip():
             err(f"metadata.txt missing required key: {key}")
+
+    if not raw.isascii():
+        err("metadata.txt must be ASCII")
+    if "supportsQt6" in g:
+        err("supportsQt6 is obsolete (QGIS 4 compatibility comes from qgisMaximumVersion)")
+    category = g.get("category", "").strip()
+    if category and category not in ("Raster", "Vector", "Database", "Mesh", "Web"):
+        err(f"invalid category {category!r} (Raster, Vector, Database, Mesh or Web; omit for Plugins)")
+    for key in ("qgisMinimumVersion", "qgisMaximumVersion"):
+        value = g.get(key, "").strip()
+        if value and not re.fullmatch(r"\d+\.\d+(\.\d+)?", value):
+            err(f"{key} must be dotted numbers, got {value!r}")
+    major_min = int((g.get("qgisMinimumVersion", "0").split(".") or ["0"])[0] or 0)
+    if major_min < 4:
+        err("qgisMinimumVersion must be >= 4.0: the code is Qt6/PyQt6-only")
+    if not (ROOT / "LICENSE").is_file():
+        err("LICENSE (no extension) is mandatory for plugins.qgis.org")
+    if "plugin" in g.get("name", "").lower():
+        warn("plugin name should not contain the word 'plugin'")
 
     meta_ver = g.get("version", "").strip()
     if expected_version and meta_ver != expected_version:

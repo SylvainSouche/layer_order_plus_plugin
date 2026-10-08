@@ -8,6 +8,8 @@ from layer_order_plus_qgis4.icons import (
     icon_add_group,
     icon_for_layer,
     icon_group,
+    icon_move_down,
+    icon_move_up,
     icon_remove_group,
     icon_rename_group,
 )
@@ -20,7 +22,7 @@ def test_bundled_icon_missing_file_returns_empty_qicon():
 
 
 @pytest.mark.parametrize("factory", [icon_group, icon_add_group, icon_remove_group,
-                                     icon_rename_group])
+                                     icon_rename_group, icon_move_up, icon_move_down])
 def test_toolbar_and_group_icons_are_bundled(factory):
     assert not factory().isNull()
 
@@ -32,5 +34,5 @@ def test_icon_for_missing_layer_is_generic():
 def test_bundled_icon_files_exist():
     icons_dir = os.path.join(PLUGIN_ROOT, "icons")
     for fname in ("folder.svg", "add_group.svg", "remove_group.svg",
-                  "rename_group.svg", "layer.svg"):
+                  "rename_group.svg", "layer.svg", "move_up.svg", "move_down.svg"):
         assert os.path.isfile(os.path.join(icons_dir, fname)), f"missing icon: {fname}"

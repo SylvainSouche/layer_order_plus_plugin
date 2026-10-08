@@ -8,6 +8,9 @@ Left/Right keys. Those are disabled and reported as
     expand_intent(group_id, expanded)
 
 The ViewController records the wish in the Model, which renders it back.
+
+Ctrl+↑ / Ctrl+↓ (Cmd on macOS) are reported as ``move_intent(up)``; the
+dock adds the current selection.
 """
 from qgis.PyQt.QtCore import QModelIndex, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import QAbstractItemView, QTreeView
@@ -18,6 +21,7 @@ from .tree_model import ROLE_ID, ROLE_TYPE
 
 class LayerOrderTree(QTreeView):
     expand_intent = pyqtSignal(str, bool)   # group id, expanded
+    move_intent = pyqtSignal(bool)          # up
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,6 +55,11 @@ class LayerOrderTree(QTreeView):
         super().mousePressEvent(e)
 
     def keyPressEvent(self, e):
+        # Arrow keys carry KeypadModifier on macOS: ignore it
+        mods = e.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if mods == Qt.KeyboardModifier.ControlModifier and e.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.move_intent.emit(e.key() == Qt.Key.Key_Up)
+            return
         index = self.currentIndex()
         if index.isValid() and index.data(ROLE_TYPE) == TYPE_GROUP:
             if e.key() == Qt.Key.Key_Right and not self.isExpanded(index) and self.model().hasChildren(index):

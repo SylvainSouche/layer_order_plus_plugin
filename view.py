@@ -30,7 +30,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from .icons import icon_add_group, icon_remove_group, icon_rename_group
+from .icons import icon_add_group, icon_move_down, icon_move_up, icon_remove_group, icon_rename_group
 from .model import TYPE_GROUP
 from .tree_model import ROLE_ID, ROLE_TYPE, LayerOrderItemModel
 from .tree_view import LayerOrderTree
@@ -43,7 +43,9 @@ _TREE_TOOLTIP = (
     "  • Drop ABOVE an item → reorders just above that item\n"
     "  • Drop BELOW an item → reorders just below that item\n"
     "  • Drop in the empty area → moves to the bottom of the list\n\n"
-    "Right-click for: Create / Rename / Delete group, Expand / Collapse, Move to top / bottom.\n"
+    "Move up / down: toolbar arrows or Ctrl+↑ / Ctrl+↓ (⌘ on macOS); items stay in their group.\n"
+    "Right-click for: Create / Rename / Delete group, Expand / Collapse,\n"
+    "Move up / down / to top / to bottom.\n"
     "Double-click a group to expand or collapse it."
 )
 
@@ -58,6 +60,7 @@ class LayerOrderView(QDockWidget):
     rename_group_requested = pyqtSignal(str)             # group id
     delete_groups_requested = pyqtSignal(list)           # group ids
     move_to_boundary_requested = pyqtSignal(list, bool)  # item ids, to_top
+    move_by_one_requested = pyqtSignal(list, bool)       # item ids, up
     expand_requested = pyqtSignal(list, bool)            # group ids, expanded
     check_requested = pyqtSignal(str, bool)              # item id (layer or group), checked
     drop_requested = pyqtSignal(list, str, str)          # moving ids, target id, DROP_* position
@@ -93,8 +96,13 @@ class LayerOrderView(QDockWidget):
         self.btn_add_group = tool_button(icon_add_group(), "Create group")
         self.btn_rename_group = tool_button(icon_rename_group(), "Rename group")
         self.btn_del_group = tool_button(icon_remove_group(), "Delete group")
+        self.btn_move_up = tool_button(icon_move_up(), "Move up (Ctrl+↑)")
+        self.btn_move_down = tool_button(icon_move_down(), "Move down (Ctrl+↓)")
         for b in (self.btn_add_group, self.btn_rename_group, self.btn_del_group):
             head.addWidget(b)
+        head.addSpacing(8)
+        head.addWidget(self.btn_move_up)
+        head.addWidget(self.btn_move_down)
         head.addStretch(1)
 
         self.tree = LayerOrderTree()
@@ -128,6 +136,9 @@ class LayerOrderView(QDockWidget):
         self.btn_rename_group.clicked.connect(self._request_rename)
         self.btn_del_group.clicked.connect(
             lambda: self.delete_groups_requested.emit(self.selected_group_ids()))
+        self.btn_move_up.clicked.connect(lambda: self._request_move_by_one(True))
+        self.btn_move_down.clicked.connect(lambda: self._request_move_by_one(False))
+        self.tree.move_intent.connect(self._request_move_by_one)
         self._report_only(self.chk_control, self.control_toggled)
         self._report_only(self.chk_remove_empty, self.remove_empty_toggled)
         self._report_only(self.chk_verbose, self.verbose_toggled)
@@ -170,6 +181,11 @@ class LayerOrderView(QDockWidget):
         return [ix.data(ROLE_ID) for ix in self.tree.selectionModel().selectedIndexes()
                 if ix.data(ROLE_TYPE) == TYPE_GROUP]
 
+    def _request_move_by_one(self, up: bool):
+        ids = self.selected_ids()
+        if ids:
+            self.move_by_one_requested.emit(ids, up)
+
     def _request_rename(self):
         groups = self.selected_group_ids()
         if len(groups) == 1:
@@ -178,8 +194,11 @@ class LayerOrderView(QDockWidget):
     def _update_group_buttons(self, *_args):
         n = len(self.selected_group_ids())
         enabled = self.chk_control.isChecked()
+        any_selected = self.tree.selectionModel().hasSelection()
         self.btn_rename_group.setEnabled(enabled and n == 1)
         self.btn_del_group.setEnabled(enabled and n >= 1)
+        self.btn_move_up.setEnabled(enabled and any_selected)
+        self.btn_move_down.setEnabled(enabled and any_selected)
 
     def _on_context_menu(self, pos):
         if not self.chk_control.isChecked():
@@ -199,12 +218,14 @@ class LayerOrderView(QDockWidget):
         act_expand = menu.addAction("Expand group")
         act_collapse = menu.addAction("Collapse group")
         menu.addSeparator()
+        act_up = menu.addAction(icon_move_up(), "Move up")
+        act_down = menu.addAction(icon_move_down(), "Move down")
         act_top = menu.addAction("Move to top")
         act_bottom = menu.addAction("Move to bottom")
         act_rename.setEnabled(len(groups) == 1)
         for a in (act_delete, act_expand, act_collapse):
             a.setEnabled(bool(groups))
-        for a in (act_top, act_bottom):
+        for a in (act_up, act_down, act_top, act_bottom):
             a.setEnabled(bool(ids))
 
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
@@ -218,6 +239,10 @@ class LayerOrderView(QDockWidget):
             self.expand_requested.emit(groups, True)
         elif chosen is act_collapse:
             self.expand_requested.emit(groups, False)
+        elif chosen is act_up:
+            self.move_by_one_requested.emit(ids, True)
+        elif chosen is act_down:
+            self.move_by_one_requested.emit(ids, False)
         elif chosen is act_top:
             self.move_to_boundary_requested.emit(ids, True)
         elif chosen is act_bottom:
