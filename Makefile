@@ -1,25 +1,25 @@
 # Layer Order Plus (QGIS 4 fork) — build
 # Single source of truth: ./VERSION
-# Next milestone when validated: 1.1.0
+# Detailed history: VERSION.md; macro versions: metadata.txt changelog
 
 PLUGIN_DIR   := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PLUGIN_DIR   := $(PLUGIN_DIR:/=)
 PLUGIN_NAME  := layer_order_plus_qgis4
 VERSION_FILE := $(PLUGIN_DIR)/VERSION
 VERSION      := $(shell tr -d '[:space:]' < "$(VERSION_FILE)")
-# Zip lands in ./dist (CI-friendly; also copied beside Makefile parent when useful)
+# Zip lands in ./dist
 DIST_DIR     := $(PLUGIN_DIR)/dist
 ZIP_NAME     := $(PLUGIN_NAME)-$(VERSION).zip
 ZIP_PATH     := $(DIST_DIR)/$(ZIP_NAME)
 
-.PHONY: all zip sync clean show-version help check
+.PHONY: all zip sync clean show-version help check test lint qgis-test
 
 all: zip
 
 help:
 	@echo "VERSION (from ./VERSION) = $(VERSION)"
 	@echo "Output zip               = $(ZIP_PATH)"
-	@echo "Targets: zip sync clean show-version check"
+	@echo "Targets: zip sync clean show-version check lint test qgis-test"
 
 show-version:
 	@echo $(VERSION)
@@ -40,20 +40,35 @@ print(f'metadata.txt version -> {ver}')"
 check:
 	python3 "$(PLUGIN_DIR)/scripts/check_plugin.py"
 
+test:
+	@bash "$(PLUGIN_DIR)/scripts/run_tests.sh"
+
+lint:
+	ruff check "$(PLUGIN_DIR)"
+
+# End-to-end checks inside a real (headless) QGIS — see tests/qgis/
+qgis-test:
+	@bash "$(PLUGIN_DIR)/scripts/run_qgis_checks.sh"
+
+# The plugin folder name inside the zip is the plugin's identity in QGIS
+# (and on plugins.qgis.org): never derive it from the checkout folder.
+PLUGIN_FOLDER := layer_order_plus_plugin
+# Runtime files only (plus the user guide and history); no dev files,
+# no hidden files, no executable bits.
+RUNTIME_FILES := $(sort $(wildcard $(PLUGIN_DIR)/*.py)) \
+                 $(PLUGIN_DIR)/metadata.txt $(PLUGIN_DIR)/LICENSE $(PLUGIN_DIR)/icon.png \
+                 $(PLUGIN_DIR)/README.md $(PLUGIN_DIR)/VERSION.md
+STAGE := $(DIST_DIR)/stage
+
 zip: sync
-	@mkdir -p "$(DIST_DIR)"
-	@echo "Building $(ZIP_NAME) ..."
-	@rm -f "$(ZIP_PATH)"
-	@# zip contents: plugin folder named layer_order_plus_qgis4 for QGIS Install from ZIP
-	@cd "$(PLUGIN_DIR)/.." && zip -r "$(ZIP_PATH)" "$(notdir $(PLUGIN_DIR))" \
-		-x "*__pycache__*" \
-		-x "*.pyc" \
-		-x "*.pyo" \
-		-x "*/.DS_Store" \
-		-x "*/.git/*" \
-		-x "*/dist/*" \
-		-x "*/.github/*"
-	@ls -la "$(ZIP_PATH)"
+	@rm -rf "$(STAGE)" "$(ZIP_PATH)"
+	@mkdir -p "$(STAGE)/$(PLUGIN_FOLDER)/icons" "$(STAGE)/$(PLUGIN_FOLDER)/docs"
+	@cp $(RUNTIME_FILES) "$(STAGE)/$(PLUGIN_FOLDER)/"
+	@cp $(PLUGIN_DIR)/icons/*.svg "$(STAGE)/$(PLUGIN_FOLDER)/icons/"
+	@cp $(PLUGIN_DIR)/docs/DOCUMENTATION.md "$(STAGE)/$(PLUGIN_FOLDER)/docs/"
+	@find "$(STAGE)" -type d -exec chmod 755 {} + && find "$(STAGE)" -type f -exec chmod 644 {} +
+	@cd "$(STAGE)" && zip -qrX "$(ZIP_PATH)" "$(PLUGIN_FOLDER)"
+	@rm -rf "$(STAGE)"
 	@echo "OK: $(ZIP_PATH)"
 
 clean:

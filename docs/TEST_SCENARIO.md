@@ -1,152 +1,86 @@
-# Layer Order Plus — Full test scenario
+# Layer Order Plus — Manual acceptance test
 
-**Target version:** 1.0.14  
-**Environment:** QGIS 4.2.x (or current 4.x), fresh or throwaway project  
-**Goal:** Manual acceptance before **1.1.0**
+What the automated checks can't do: real mouse drags, QGIS's real Layer
+Order panel, and real projects. Everything else is covered by `make test`
+and `make qgis-test` (see [`ARCHITECTURE.md`](ARCHITECTURE.md#tests)) —
+run those first.
 
-Mark each row **Pass / Fail** and note build (`VERSION` file / About).
-
----
-
-## 0. Install and load
-
-| Step | Action | Expected |
-|------|--------|----------|
-| 0.1 | Install from ZIP `layer_order_plus_qgis4-1.0.14.zip` | No “Error reading metadata” |
-| 0.2 | Enable plugin | Dock **Layer Order Plus** appears; no traceback in Log Messages |
-| 0.3 | Toolbar shows three icons | Create group, Rename group, Delete group |
-
-**Pass criteria:** Plugin loads cleanly on QGIS 4.
+**Setup:** QGIS 4.x, a project with five point layers **A B C D E**, both
+**Layer Order Plus** and QGIS's **Layer Order** panel visible, *Verbose
+logging* on (Log Messages → LayerOrderPlus). Note the build from
+`VERSION`. Mark each row Pass / Fail.
 
 ---
 
-## 1. Layers and icons
+## 1. Load and control
 
-| Step | Action | Expected |
-|------|--------|----------|
-| 1.1 | Add several vector (point/line/polygon) and one raster | Each appears once in the Plus tree |
-| 1.2 | Check icons | Groups → folder; layers → type-specific or generic layer icon |
-| 1.3 | Compare with stock Layer Order / map | After reorders, canvas Z-order matches flattened Plus tree (top = on top) |
+| # | Action | Expected |
+|---|---|---|
+| 1.1 | Install the zip, enable the plugin | Dock appears, no error in the log |
+| 1.2 | Open the project, check **Control rendering order** in Plus | Both panels show the same order; map follows it |
+| 1.3 | Uncheck it, then check it in **QGIS's** panel instead | Plus checkbox follows; both panels show the same order |
 
-**Pass criteria:** Icons visible; every project layer listed once; draw order follows tree.
+## 2. Groups
 
----
+| # | Action | Expected |
+|---|---|---|
+| 2.1 | Select A, B → **Create group** "AB"; same for C, D → "CD" | Groups take the place of their layers |
+| 2.2 | Select AB and CD → **Create group** "ABCD" | ABCD holds AB then CD; E stays below |
+| 2.3 | Rename, then delete a group (toolbar and context menu) | Contents take the group's place |
+| 2.4 | Collapse ABCD with the arrow, double-click, ←/→ | Expands/collapses each time; stays so after other edits |
 
-## 2. Create group
+## 3. Drag and drop in Plus (mouse)
 
-| Step | Action | Expected |
-|------|--------|----------|
-| 2.1 | Select 2–3 layers → Create group → accept default name | Unique name (`New group` or `New group N`); layers inside; folder icon |
-| 2.2 | Create again with same default | Name is unique (not a duplicate label) |
-| 2.3 | Create with empty selection | Empty group allowed |
-| 2.4 | Nested: create group while selection is inside another group | Nested structure OK |
+| # | Action | Expected |
+|---|---|---|
+| 3.1 | Drag E above / below various layers, inside and outside groups | Lands exactly at the indicator; QGIS's panel and map follow |
+| 3.2 | Drag E **onto** group CD | E becomes CD's last layer |
+| 3.3 | Drag E **onto** layer C | New group holding C then E, at C's place |
+| 3.4 | Drag CD into the empty area below the list | CD at the bottom |
+| 3.5 | Multi-select (Ctrl+click in reverse order) two layers, drag | Both move, in on-screen order |
+| 3.6 | Try to drag ABCD onto AB | Refused (no-drop cursor), nothing changes |
+| 3.7 | After each drop | Scroll position and other groups' expansion unchanged; moved items selected |
 
-**Pass criteria:** Groups only in this panel; Layers panel tree unchanged.
+## 3b. Move up / down
 
----
+| # | Action | Expected |
+|---|---|---|
+| 3b.1 | Select B → toolbar ▲ | B above A inside AB; map follows |
+| 3b.2 | ▲ again | Nothing moves (B is first in AB) |
+| 3b.3 | Select C and D (all of CD) → **Ctrl+↓** / **⌘↓** | Nothing moves: the block already fills CD |
+| 3b.4 | Select group AB → ▼ | AB moves below CD, inside ABCD |
+| 3b.5 | Ctrl+Z | Undoes the last step only |
 
-## 3. Rename (no double-click edit)
+## 4. QGIS's Layer Order panel
 
-| Step | Action | Expected |
-|------|--------|----------|
-| 3.1 | Select one group → **Rename** toolbar | Dialog opens; new name applied |
-| 3.2 | Select one group → right-click → **Rename group** | Same dialog behaviour |
-| 3.3 | Double-click group name | **Does not** open inline editor; toggles expand/collapse only |
-| 3.4 | Rename with zero or multiple groups selected | Rename button disabled; context Rename disabled if not exactly one group |
+| # | Action | Expected |
+|---|---|---|
+| 4.1 | Drag E between A and B | E joins AB |
+| 4.2 | Drag E to the very top | E stays in AB (first); no other layer changes group |
+| 4.3 | Drag E back between A and B, then after D, then between C and D | Only E's group changes; A–D never move out of their groups |
+| 4.4 | Swap A and B | Still both in AB |
 
-**Pass criteria:** Rename only via toolbar/context dialog.
+## 5. Visibility
 
----
+| # | Action | Expected |
+|---|---|---|
+| 5.1 | Uncheck a layer in Plus / in the Layers panel | The other panel follows; map updates |
+| 5.2 | Uncheck group AB in Plus | A and B unchecked everywhere |
+| 5.3 | Put D in a Layers-panel group and uncheck that group | D shows unchecked in Plus |
+| 5.4 | Check D in Plus | The Layers-panel group is checked again; D shows |
 
-## 4. Double-click behaviour
+## 6. Layers added / removed
 
-| Step | Action | Expected |
-|------|--------|----------|
-| 4.1 | Double-click collapsed group | Expands |
-| 4.2 | Double-click expanded group | Collapses |
-| 4.3 | Double-click layer | No rename, no other action |
+| # | Action | Expected |
+|---|---|---|
+| 6.1 | Add a layer with C selected in the Layers panel | Appears next to C in Plus |
+| 6.2 | Remove the last layer of a group (remove-empty on / off) | Group removed / kept |
 
----
+## 7. Undo and persistence
 
-## 5. Drag and drop
-
-| Step | Action | Expected |
-|------|--------|----------|
-| 5.1 | Drag layer **above** / **below** sibling | Reorder only; map updates |
-| 5.2 | Drop layer **on** a group | Moves to top of that group |
-| 5.3 | Drop layer or group **on** a layer | New group created; **target + dropped** inside; unique name; group and **ancestors expanded** |
-| 5.4 | Drop onto own descendant | Ignored (no cycle) |
-| 5.5 | Multi-select drag above/below | All move; relative order preserved when possible |
-
-**Pass criteria:** No node disappearance; no crash; canvas matches flattened order.
-
----
-
-## 6. Delete group
-
-| Step | Action | Expected |
-|------|--------|----------|
-| 6.1 | Select **no** group (only layers) | Delete button **greyed out** |
-| 6.2 | Select one group → Delete | Group removed; children promoted in place |
-| 6.3 | Select **several** groups → Delete | **All** selected groups removed (not only last) |
-| 6.4 | Context menu Delete with no group selected | Action disabled |
-
-**Pass criteria:** Multi-delete works; children not destroyed.
-
----
-
-## 7. Context menu
-
-| Step | Action | Expected |
-|------|--------|----------|
-| 7.1 | Right-click empty / layer | Create enabled; Rename/Delete per selection rules |
-| 7.2 | Right-click one group | Create, Rename, Delete all usable |
-| 7.3 | Right-click with two groups selected | Rename disabled; Delete enabled |
-
----
-
-## 8. Undo / redo (critical)
-
-| Step | Action | Expected |
-|------|--------|----------|
-| 8.1 | Reorder or group change → **Ctrl+Z** | Tree **and** map order restored |
-| 8.2 | **Ctrl+Y** / **Ctrl+Shift+Z** | Redo |
-| 8.3 | **Edit → Undo layer order** | Same as Ctrl+Z when no layer is being edited |
-| 8.4 | Start editing a vector layer, change features | Layer digitizing undo still works; order undo does not steal while editing |
-| 8.5 | Stop editing, change order, Edit menu undo | Order undo available again |
-
-**Pass criteria:** Undo never leaves map order out of sync with the panel.
-
----
-
-## 9. Project save / load
-
-| Step | Action | Expected |
-|------|--------|----------|
-| 9.1 | Build groups + order → Save project → Reload | Tree structure and names restored |
-| 9.2 | Map draw order after reload | Matches saved tree |
-
----
-
-## 10. Regression / smoke
-
-| Step | Action | Expected |
-|------|--------|----------|
-| 10.1 | Add layer after groups exist | Layer appears in tree (typically top-level) |
-| 10.2 | Remove layer from project | Removed from tree; no crash |
-| 10.3 | Disable/enable plugin | Clean unload/reload |
-
----
-
-## Sign-off
-
-| Field | Value |
-|-------|--------|
-| Tester | |
-| QGIS version | |
-| Plugin VERSION | 1.0.14 |
-| Date | |
-| Result | Pass / Fail |
-| Notes | |
-
-When this scenario passes, bump to **1.1.0**.
+| # | Action | Expected |
+|---|---|---|
+| 7.1 | Ctrl+Z / Ctrl+Y with focus on the map and on the Plus tree | One step each, order and map follow |
+| 7.2 | Start editing a layer, Ctrl+Z | Digitizing undo, not layer order |
+| 7.3 | Add a layer, then Ctrl+Z | The layer stays |
+| 7.4 | Save, close, reopen the project | Same groups, order, expansion; history empty |
