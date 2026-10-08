@@ -20,6 +20,7 @@ from qgis.PyQt.QtWidgets import (
     QTreeWidgetItem,
 )
 
+from .logger import _vlog, _vlog_method
 from .tree_utils import (
     ROLE_TYPE,
     ROLE_ID,
@@ -53,6 +54,7 @@ class BetterLayerTree(QTreeWidget):
     # event helpers
     # ------------------------------------------------------------------
     def _event_pos_point(self, e: QDropEvent):
+        _vlog_method("_event_pos_point")
         return e.position().toPoint() if hasattr(e, "position") else e.pos()
 
     def _is_ancestor(self, anc: QTreeWidgetItem, node: QTreeWidgetItem) -> bool:
@@ -117,8 +119,13 @@ class BetterLayerTree(QTreeWidget):
         # Emit the semantic intent — ViewController will translate to Model mutations
         moving_item_ids = [it.data(0, ROLE_ID) for it in moving]
         target_id = target.data(0, ROLE_ID)
+        _vlog(f"drop_intent: moving={moving_item_ids} target={target_id} pos={position}")
         self.drop_intent.emit(moving_item_ids, target_id, position)
 
-        # Accept the event so Qt doesn't show "failed drop" feedback.
-        # The View will be updated via Model events on the next event loop cycle.
+        # CRITICAL: set the drop action to IgnoreAction so Qt's QTreeWidget
+        # does NOT remove the source items from the model. We handle the
+        # actual move via the Model (deferred to next event loop iteration
+        # by the ViewController). Without this, Qt's InternalMove would
+        # delete the dragged items from the tree, desyncing View from Model.
+        e.setDropAction(Qt.DropAction.IgnoreAction)
         e.accept()

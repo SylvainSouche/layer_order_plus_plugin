@@ -24,22 +24,13 @@ from qgis.core import (
     QgsMessageLog,
     Qgis,
 )
+from .logger import _log, _vlog, _vlog_method, _vlog_error
 
 from .icons import icon_for_layer
 from .view import LayerOrderView
 
 
 LOG_TAG = "LayerOrderPlus"
-
-
-def _log(msg, level=Qgis.Info):
-    try:
-        QgsMessageLog.logMessage(str(msg), LOG_TAG, level)
-    except Exception:
-        try:
-            print(f"[{LOG_TAG}] {msg}")
-        except Exception:
-            pass
 
 
 class LayerOrderController(QObject):
@@ -101,11 +92,13 @@ class LayerOrderController(QObject):
     # QGIS signal connections
     # ==================================================================
     def _connect_qgis_signals(self):
+        _vlog_method("_connect_qgis_signals")
         proj = QgsProject.instance()
         proj.layersAdded.connect(self._on_layers_added)
         proj.layersWillBeRemoved.connect(self._on_layers_removed)
 
     def _connect_view_signals(self):
+        _vlog_method("_connect_view_signals")
         # Control checkbox — user toggles → sync to QGIS hasCustomLayerOrder
         self._view.control_toggled.connect(self._on_control_toggled)
         # Remove-empty checkbox — user toggles → persist to QgsProject
@@ -114,24 +107,78 @@ class LayerOrderController(QObject):
         self._view.layer_visibility_toggled.connect(self._on_layer_visibility_toggled)
 
     def _connect_vc_signals(self):
+        _vlog_method("_connect_vc_signals")
         # ViewController emits order_changed when the Model's flattened order changes
         self._vc.order_changed.connect(self._on_order_changed)
 
     def _connect_layer_tree_visibility(self):
-        """Connect to the QGIS layer tree root's visibilityChanged signal.
+        _vlog_method("_connect_layer_tree_visibility")
+        """Connect to the QGIS layer tree root's signals.
 
-        This catches GROUP visibility changes in the Layers panel (which
-        don't always fire per-layer visibilityChanged). When a group is
-        toggled, we refresh the effective visibility of all layers.
+        - visibilityChanged: catches GROUP visibility changes in the Layers panel
+        - hasCustomLayerOrderChanged: syncs the control checkbox with stock Layer Order
+        - customLayerOrderChanged: syncs layer moves from stock Layer Order to Plus
         """
         try:
             root = QgsProject.instance().layerTreeRoot()
-            # visibilityChanged on the root fires when any node's visibility changes
             root.visibilityChanged.connect(self._on_tree_visibility_changed)
+            # Sync control checkbox with stock Layer Order panel
+            if hasattr(root, 'hasCustomLayerOrderChanged'):
+                root.hasCustomLayerOrderChanged.connect(self._on_has_custom_order_changed)
+            # Sync layer moves from stock Layer Order panel
+            if hasattr(root, 'customLayerOrderChanged'):
+                root.customLayerOrderChanged.connect(self._on_custom_order_changed)
         except Exception as e:
             _log(f"_connect_layer_tree_visibility: failed: {e!r}", Qgis.Warning)
 
+    def _on_has_custom_order_changed(self):
+        _vlog_method("_on_has_custom_order_changed")
+        """Stock Layer Order checkbox toggled → sync Plus checkbox."""
+        self._sync_control_from_project()
+
+    def _on_custom_order_changed(self):
+        _vlog_method("_on_custom_order_changed")
+        """Stock Layer Order panel moved a layer → update Model."""
+        if not self._view.is_control_enabled():
+            return
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            qgis_order = [lyr.id() for lyr in root.customLayerOrder()]
+            our_order = self._vc.get_flattened_layer_ids()
+            if qgis_order == our_order:
+                return
+            _log(f"_on_custom_order_changed: QGIS order differs from Plus — reconciling")
+            self._reconcile_order_with_qgis(qgis_order)
+        except Exception as e:
+            _log(f"_on_custom_order_changed FAILED: {e!r}", Qgis.Critical)
+
+    def _reconcile_order_with_qgis(self, qgis_order):
+        _vlog_method("_reconcile_order_with_qgis")
+        """Rebuild the Model's layer order to match QGIS's flat order."""
+        from .model import GroupNode
+        model = self._vc._model
+        # Check if our Model has any groups
+        def has_groups_recursive(nodes):
+            for n in nodes:
+                if isinstance(n, GroupNode):
+                    return True
+                if isinstance(n, GroupNode) and has_groups_recursive(n.children):
+                    return True
+            return False
+        if has_groups_recursive(model.get_root()):
+            _log("QGIS order change conflicts with Plus grouping — "
+                 "rebuilding flat (groups removed to honour QGIS order)", Qgis.Warning)
+        # Rebuild flat to match QGIS's order
+        with model.block_notifications():
+            model.clear()
+            for lid in qgis_order:
+                lyr = QgsProject.instance().mapLayer(lid)
+                if lyr:
+                    model.add_layer(lid, lyr.name())
+        self._vc._rebuild_view_from_model()
+
     def _on_tree_visibility_changed(self, node):
+        _vlog_method("_on_tree_visibility_changed")
         """A node's visibility changed in the Layers panel → refresh all layers.
 
         When a group is toggled, we need to update all child layers' effective
@@ -146,6 +193,7 @@ class LayerOrderController(QObject):
     # QGIS layer signal handlers
     # ==================================================================
     def _on_layers_added(self, layers):
+        _vlog_method("_on_layers_added")
         _log(f"_on_layers_added: received {len(layers) if layers else 0} layer(s)")
         try:
             layer_data = [(lyr.id(), lyr.name()) for lyr in layers]
@@ -159,6 +207,7 @@ class LayerOrderController(QObject):
             _log(traceback.format_exc(), Qgis.Critical)
 
     def _on_layers_removed(self, layer_ids):
+        _vlog_method("_on_layers_removed")
         _log(f"_on_layers_removed: received {len(layer_ids) if layer_ids else 0} id(s)")
         try:
             for lid in (layer_ids or []):
@@ -173,6 +222,7 @@ class LayerOrderController(QObject):
     # Layer rename sync (QGIS layer.nameChanged → ViewController)
     # ==================================================================
     def connect_layer(self, lyr):
+        _vlog_method("connect_layer")
         """Public API: connect rename + visibility listeners for a layer.
 
         Called by plugin.py on project load for every existing layer.
@@ -182,6 +232,7 @@ class LayerOrderController(QObject):
         self._connect_layer_visibility(lyr)
 
     def _connect_layer_rename(self, lyr):
+        _vlog_method("_connect_layer_rename")
         if lyr is None:
             return
         lid = lyr.id()
@@ -195,6 +246,7 @@ class LayerOrderController(QObject):
             _log(f"_connect_layer_rename: failed for {lid}: {e!r}", Qgis.Warning)
 
     def _disconnect_layer_rename(self, lid):
+        _vlog_method("_disconnect_layer_rename")
         entry = self._layer_rename_connections.pop(lid, None)
         if entry is None:
             return
@@ -205,10 +257,12 @@ class LayerOrderController(QObject):
             pass
 
     def _disconnect_all_layer_renames(self):
+        _vlog_method("_disconnect_all_layer_renames")
         for lid in list(self._layer_rename_connections.keys()):
             self._disconnect_layer_rename(lid)
 
     def _on_layer_renamed(self, lid, lyr):
+        _vlog_method("_on_layer_renamed")
         try:
             new_name = lyr.name()
         except RuntimeError:
@@ -219,6 +273,7 @@ class LayerOrderController(QObject):
     # Layer visibility sync (QgsLayerTreeLayer.visibilityChanged → ViewController)
     # ==================================================================
     def _find_layer_tree_layer(self, layer_id):
+        _vlog_method("_find_layer_tree_layer")
         try:
             root = QgsProject.instance().layerTreeRoot()
             return root.findLayer(layer_id)
@@ -226,6 +281,7 @@ class LayerOrderController(QObject):
             return None
 
     def _connect_layer_visibility(self, lyr):
+        _vlog_method("_connect_layer_visibility")
         if lyr is None:
             return
         lid = lyr.id()
@@ -242,6 +298,7 @@ class LayerOrderController(QObject):
             _log(f"_connect_layer_visibility: failed for {lid}: {e!r}", Qgis.Warning)
 
     def _disconnect_layer_visibility(self, lid):
+        _vlog_method("_disconnect_layer_visibility")
         entry = self._visibility_connections.pop(lid, None)
         if entry is None:
             return
@@ -252,10 +309,12 @@ class LayerOrderController(QObject):
             pass
 
     def _disconnect_all_layer_visibilities(self):
+        _vlog_method("_disconnect_all_layer_visibilities")
         for lid in list(self._visibility_connections.keys()):
             self._disconnect_layer_visibility(lid)
 
     def _get_effective_visibility(self, layer_id):
+        _vlog_method("_get_effective_visibility")
         """Return the EFFECTIVE visibility of a layer (considering parent groups).
 
         QGIS's `itemVisibilityChecked()` returns the individual checkbox state,
@@ -284,6 +343,7 @@ class LayerOrderController(QObject):
             return True
 
     def _on_layer_visibility_external(self, lid):
+        _vlog_method("_on_layer_visibility_external")
         """Layer visibility changed in the Layers panel → update Model.
 
         Uses EFFECTIVE visibility (considering parent group visibility) so
@@ -293,6 +353,7 @@ class LayerOrderController(QObject):
         self._vc.set_layer_visibility(lid, visible)
 
     def _on_layer_visibility_toggled(self, layer_id, checked):
+        _vlog_method("_on_layer_visibility_toggled")
         """User toggled visibility in the Plus panel → sync to QgsLayerTreeLayer."""
         ltl = self._find_layer_tree_layer(layer_id)
         if ltl is None:
@@ -311,6 +372,7 @@ class LayerOrderController(QObject):
     # Control rendering order checkbox (QGIS hasCustomLayerOrder ↔ View)
     # ==================================================================
     def _on_control_toggled(self, checked):
+        _vlog_method("_on_control_toggled")
         """User toggled the control checkbox → sync to QGIS."""
         root = QgsProject.instance().layerTreeRoot()
         if checked:
@@ -324,6 +386,7 @@ class LayerOrderController(QObject):
             pass
 
     def _sync_control_from_project(self):
+        _vlog_method("_sync_control_from_project")
         """Read QGIS hasCustomLayerOrder → set the View checkbox."""
         root = QgsProject.instance().layerTreeRoot()
         checked = bool(root.hasCustomLayerOrder())
@@ -333,6 +396,7 @@ class LayerOrderController(QObject):
     # remove-empty-groups setting (QgsProject entry ↔ View checkbox)
     # ==================================================================
     def _on_remove_empty_toggled(self, checked):
+        _vlog_method("_on_remove_empty_toggled")
         try:
             QgsProject.instance().writeEntry("BetterLayerOrder", "removeEmptyGroups", bool(checked))
             QgsProject.instance().setDirty(True)
@@ -341,6 +405,7 @@ class LayerOrderController(QObject):
             _log(f"_on_remove_empty_toggled: failed to persist: {e!r}", Qgis.Warning)
 
     def _sync_remove_empty_from_project(self):
+        _vlog_method("_sync_remove_empty_from_project")
         try:
             val, ok = QgsProject.instance().readEntry("BetterLayerOrder", "removeEmptyGroups", "1")
             checked = bool(int(val)) if ok and val not in ("", None) else True
@@ -352,24 +417,29 @@ class LayerOrderController(QObject):
     # Apply state machine (Model order_changed → QGIS setCustomLayerOrder)
     # ==================================================================
     def _on_order_changed(self):
+        _vlog_method("_on_order_changed")
         """Model's flattened order changed → debounce an apply to QGIS."""
         self.request_apply()
 
     def request_apply(self):
+        _vlog_method("request_apply")
         if self._apply_suspended:
             return
         self._apply_timer.start(50)
 
     def _apply_now(self):
+        _vlog_method("_apply_now")
         if self._apply_suspended:
             return
         self._apply_custom_order()
 
     def _apply_now_force(self):
+        _vlog_method("_apply_now_force")
         """Apply even when suspended (used by control checkbox toggle)."""
         self._apply_custom_order()
 
     def _apply_custom_order(self):
+        _vlog_method("_apply_custom_order")
         try:
             root = QgsProject.instance().layerTreeRoot()
             if not self._view.is_control_enabled():
@@ -398,11 +468,13 @@ class LayerOrderController(QObject):
     # External control (plugin.py calls these during project load)
     # ==================================================================
     def set_apply_suspended(self, suspended: bool):
+        _vlog_method("set_apply_suspended")
         self._apply_suspended = bool(suspended)
         if not self._apply_suspended:
             self.request_apply()
 
     def sync_state_from_project(self):
+        _vlog_method("sync_state_from_project")
         """Called after project load — sync control + remove-empty checkboxes."""
         self._sync_control_from_project()
         self._sync_remove_empty_from_project()
@@ -422,11 +494,24 @@ class LayerOrderController(QObject):
             root.visibilityChanged.disconnect(self._on_tree_visibility_changed)
         except Exception:
             pass
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            if hasattr(root, 'hasCustomLayerOrderChanged'):
+                root.hasCustomLayerOrderChanged.disconnect(self._on_has_custom_order_changed)
+        except Exception:
+            pass
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            if hasattr(root, 'customLayerOrderChanged'):
+                root.customLayerOrderChanged.disconnect(self._on_custom_order_changed)
+        except Exception:
+            pass
 
     # ==================================================================
     # Initial layer population (called by plugin.py on project load)
     # ==================================================================
     def get_ordered_project_layers(self):
+        _vlog_method("get_ordered_project_layers")
         """Return project layers in the order QGIS would draw them."""
         proj = QgsProject.instance()
         root = proj.layerTreeRoot()

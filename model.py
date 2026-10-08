@@ -23,6 +23,12 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import contextmanager
+
+try:
+    from .logger import _vlog, _vlog_method
+except ImportError:
+    def _vlog(msg): pass
+    def _vlog_method(name): pass
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional, Union
 

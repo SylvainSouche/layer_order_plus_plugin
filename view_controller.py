@@ -21,6 +21,7 @@ from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QUndoStack
 
 from qgis.core import Qgis
+from .logger import _log, _vlog, _vlog_method, _vlog_error
 
 from .model import (
     LayerOrderModel,
@@ -116,6 +117,7 @@ class ViewController(QObject):
     # Model event dispatcher → View updates
     # ==================================================================
     def _on_model_event(self, event_type: str, payload: dict):
+        _vlog_method("_on_model_event")
         """Route Model events to View updates."""
         if event_type == EVENT_MODEL_LOADED:
             self._rebuild_view_from_model()
@@ -150,6 +152,7 @@ class ViewController(QObject):
             self.order_changed.emit()
 
     def _rebuild_view_from_model(self):
+        _vlog_method("_rebuild_view_from_model")
         """Full View rebuild from the Model's current state.
 
         Also reapplies the current filter text so filtered-out items stay
@@ -184,6 +187,7 @@ class ViewController(QObject):
     # View signal handlers → Model mutations
     # ==================================================================
     def _on_create_group(self):
+        _vlog_method("_on_create_group")
         if self._in_undo:
             return
         try:
@@ -219,6 +223,7 @@ class ViewController(QObject):
             _log(traceback.format_exc(), Qgis.Critical)
 
     def _on_rename_group(self):
+        _vlog_method("_on_rename_group")
         if self._in_undo:
             return
         try:
@@ -250,6 +255,7 @@ class ViewController(QObject):
             _log(traceback.format_exc(), Qgis.Critical)
 
     def _on_delete_groups(self):
+        _vlog_method("_on_delete_groups")
         if self._in_undo:
             return
         try:
@@ -273,6 +279,7 @@ class ViewController(QObject):
             _log(traceback.format_exc(), Qgis.Critical)
 
     def _on_move_to_boundary(self, to_top: bool):
+        _vlog_method("_on_move_to_boundary")
         if self._in_undo:
             return
         try:
@@ -290,27 +297,33 @@ class ViewController(QObject):
             _log(traceback.format_exc(), Qgis.Critical)
 
     def _on_expand_groups(self, group_ids):
+        _vlog_method("_on_expand_groups")
         for gid in group_ids:
             self._model.set_expanded(gid, True)
 
     def _on_collapse_groups(self, group_ids):
+        _vlog_method("_on_collapse_groups")
         for gid in group_ids:
             self._model.set_expanded(gid, False)
 
     def _on_filter_changed(self, text):
+        _vlog_method("_on_filter_changed")
         """Store the filter text so it can be reapplied after rebuilds."""
         self._filter_text = text or ""
         self._view.apply_filter(text)
 
     def _on_control_toggled(self, checked):
+        _vlog_method("_on_control_toggled")
         # Controller handles QGIS hasCustomLayerOrder sync directly.
         # VC doesn't need to do anything here.
         pass
 
     def _on_remove_empty_toggled(self, checked):
+        _vlog_method("_on_remove_empty_toggled")
         self._model.set_remove_empty_groups(bool(checked))
 
     def _on_layer_visibility_toggled(self, layer_id, checked):
+        _vlog_method("_on_layer_visibility_toggled")
         """User toggled a layer checkbox in the View → update Model.
 
         The Controller also listens to this signal to sync with
@@ -319,6 +332,7 @@ class ViewController(QObject):
         self._model.set_visibility(layer_id, checked)
 
     def _on_group_visibility_toggled(self, group_id, checked):
+        _vlog_method("_on_group_visibility_toggled")
         """User toggled a group checkbox → propagate to all descendant layers.
 
         Walks the Model tree under `group_id` and sets visibility on every
@@ -342,12 +356,14 @@ class ViewController(QObject):
             self._model.set_visibility(lid, checked)
 
     def _on_item_double_clicked(self, group_id):
+        _vlog_method("_on_item_double_clicked")
         """User double-clicked a group → toggle expanded state in Model."""
         node = self._model.find_item(group_id)
         if isinstance(node, GroupNode):
             self._model.set_expanded(group_id, not node.expanded)
 
     def _on_drop_intent(self, moving_ids, target_id, position):
+        _vlog_method("_on_drop_intent")
         """Translate semantic drop intent to Model mutations.
 
         DEFERRED to the next event loop iteration via QTimer.singleShot(0).
@@ -367,6 +383,7 @@ class ViewController(QObject):
         QTimer.singleShot(0, lambda: self._handle_drop_intent(ids, tid, pos))
 
     def _handle_drop_intent(self, moving_ids, target_id, position):
+        _vlog_method("_handle_drop_intent")
         """Actual drop handling — runs on next event loop iteration."""
         if self._in_undo:
             return
@@ -436,6 +453,7 @@ class ViewController(QObject):
     # Undo
     # ==================================================================
     def _push_undo(self, before: str, after: str, text: str):
+        _vlog_method("_push_undo")
         if self._in_undo:
             return
         if (before or "") == (after or ""):
@@ -445,6 +463,7 @@ class ViewController(QObject):
         self._snapshot = after or ""
 
     def _apply_tree_state_from_undo(self, raw_json: str):
+        _vlog_method("_apply_tree_state_from_undo")
         """Called by TreeStateCommand.undo/redo."""
         self._in_undo = True
         try:
@@ -459,6 +478,7 @@ class ViewController(QObject):
     # Public API for plugin.py
     # ==================================================================
     def load_from_json(self, raw_json: str):
+        _vlog_method("load_from_json")
         """Load a serialized tree into the Model (triggers View rebuild)."""
         with self._model.block_notifications():
             self._model.load_from_json(raw_json)
@@ -476,6 +496,7 @@ class ViewController(QObject):
         self._snapshot = ""
 
     def add_layers(self, layers):
+        _vlog_method("add_layers")
         """Add layers to the Model. layers: list of (layer_id, name) tuples."""
         if self._in_undo:
             return
@@ -498,6 +519,7 @@ class ViewController(QObject):
             _log(traceback.format_exc(), Qgis.Critical)
 
     def remove_layers(self, layer_ids):
+        _vlog_method("remove_layers")
         if self._in_undo:
             return
         try:
@@ -512,18 +534,21 @@ class ViewController(QObject):
             _log(traceback.format_exc(), Qgis.Critical)
 
     def rename_layer(self, layer_id, new_name):
+        _vlog_method("rename_layer")
         """Called when a layer is renamed in the Layers panel."""
         if self._in_undo:
             return
         self._model.rename_layer(layer_id, new_name)
 
     def set_layer_visibility(self, layer_id, visible):
+        _vlog_method("set_layer_visibility")
         """Called when visibility changes in the Layers panel."""
         if self._in_undo:
             return
         self._model.set_visibility(layer_id, visible)
 
     def get_flattened_layer_ids(self):
+        _vlog_method("get_flattened_layer_ids")
         return self._model.get_flattened_layer_ids()
 
     def _autosave(self):

@@ -49,6 +49,7 @@ from .icons import (
     icon_rename_group,
 )
 from .tree_widget import BetterLayerTree
+from .logger import _log, _vlog, _vlog_method, _vlog_error
 
 
 class LayerOrderView(QDockWidget):
@@ -75,6 +76,7 @@ class LayerOrderView(QDockWidget):
     filter_changed = pyqtSignal(str)
     control_toggled = pyqtSignal(bool)
     remove_empty_toggled = pyqtSignal(bool)
+    verbose_toggled = pyqtSignal(bool)
     layer_visibility_toggled = pyqtSignal(str, bool)  # layer_id, checked
     group_visibility_toggled = pyqtSignal(str, bool)  # group_id, checked (propagate to all child layers)
     item_double_clicked = pyqtSignal(str)             # item_id (group only — toggle expand)
@@ -96,6 +98,7 @@ class LayerOrderView(QDockWidget):
     # UI construction
     # ==================================================================
     def _build_ui(self):
+        _vlog_method("_build_ui")
         rootw = QWidget()
         self.setWidget(rootw)
         lay = QVBoxLayout(rootw)
@@ -168,6 +171,15 @@ class LayerOrderView(QDockWidget):
         )
         lay.addWidget(self.chk_remove_empty)
 
+        # Verbose logging checkbox — toggles _vlog in every class
+        self.chk_verbose = QCheckBox("Verbose logging (LayerOrderPlus log tab)")
+        self.chk_verbose.setToolTip(
+            "When checked, every method in every class logs its entry/exit to the "
+            "LayerOrderPlus tab in View → Panels → Log Messages. Essential for "
+            "debugging drag-drop and sync issues. OFF by default."
+        )
+        lay.addWidget(self.chk_verbose)
+
         # Local shortcuts (plugin.py also hooks Edit menu / app shortcuts).
         # The undo/redo QShortcut.activated signals are connected to the
         # class-level undo_shortcut_activated / redo_shortcut_activated
@@ -186,11 +198,13 @@ class LayerOrderView(QDockWidget):
         self._shortcuts[2].activated.connect(self.redo_shortcut_activated)
 
     def _connect_signals(self):
+        _vlog_method("_connect_signals")
         self.btn_add_group.clicked.connect(self.create_group_requested.emit)
         self.btn_rename_group.clicked.connect(self.rename_group_requested.emit)
         self.btn_del_group.clicked.connect(self.delete_group_requested.emit)
         self.chk_control.toggled.connect(self._on_control_toggled)
         self.chk_remove_empty.toggled.connect(self._on_remove_empty_toggled)
+        self.chk_verbose.toggled.connect(self._on_verbose_toggled)
         self.ed_filter.textChanged.connect(self.filter_changed.emit)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
@@ -201,23 +215,34 @@ class LayerOrderView(QDockWidget):
     # Internal signal handlers (translate raw Qt signals to semantic ones)
     # ==================================================================
     def _on_control_toggled(self, checked):
+        _vlog_method("_on_control_toggled")
         if self._syncing:
             return
         self._apply_control_ui_state(checked)
         self.control_toggled.emit(checked)
 
     def _on_remove_empty_toggled(self, checked):
+        _vlog_method("_on_remove_empty_toggled")
         if self._syncing:
             return
         self.remove_empty_toggled.emit(checked)
 
+    def _on_verbose_toggled(self, checked):
+        _vlog_method("_on_verbose_toggled")
+        """Toggle verbose logging via the central logger module."""
+        from .logger import set_verbose, _log
+        set_verbose(bool(checked))
+        _log(f"Verbose logging {'ON' if checked else 'OFF'}")
+
     def _on_item_double_clicked(self, item, column):
+        _vlog_method("_on_item_double_clicked")
         if self._syncing or item is None:
             return
         if item.data(0, ROLE_TYPE) == TYPE_GROUP:
             self.item_double_clicked.emit(item.data(0, ROLE_ID))
 
     def _on_item_changed(self, item, column):
+        _vlog_method("_on_item_changed")
         """User toggled a checkbox — emit visibility signal.
 
         For layers: emit layer_visibility_toggled(layer_id, checked).
@@ -241,6 +266,7 @@ class LayerOrderView(QDockWidget):
             self.group_visibility_toggled.emit(gid, checked)
 
     def _on_context_menu(self, pos):
+        _vlog_method("_on_context_menu")
         if not self.is_control_enabled():
             return
         menu = QMenu(self)
@@ -303,6 +329,7 @@ class LayerOrderView(QDockWidget):
         self._apply_control_ui_state(enabled)
 
     def _apply_control_ui_state(self, enabled: bool):
+        _vlog_method("_apply_control_ui_state")
         self.tree.setEnabled(enabled)
         self.btn_add_group.setEnabled(enabled)
         self.ed_filter.setEnabled(enabled)
@@ -353,6 +380,7 @@ class LayerOrderView(QDockWidget):
         return unique_group_name(self.tree, base)
 
     def _update_group_actions_enabled(self):
+        _vlog_method("_update_group_actions_enabled")
         groups = self.get_selected_group_ids()
         n = len(groups)
         self.btn_rename_group.setEnabled(n == 1 and self.is_control_enabled())
@@ -414,6 +442,7 @@ class LayerOrderView(QDockWidget):
             self._syncing = False
 
     def _build_tree_item(self, node, parent_item, expand_targets, layer_icon_provider):
+        _vlog_method("_build_tree_item")
         """Recursively build a QTreeWidgetItem from a node dict."""
         if node["type"] == TYPE_GROUP:
             it = QTreeWidgetItem([node.get("name", "Group")])
