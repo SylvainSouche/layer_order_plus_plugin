@@ -58,7 +58,7 @@ class LayerOrderController(QObject):
         # Apply state machine
         self._apply_suspended = True
         self._in_reconcile = False  # guard against reconcile feedback loop
-        self._in_apply = False      # guard: our own setCustomLayerOrder triggers customLayerOrderChanged
+        self._apply_counter = 0    # counter: our own setCustomLayerOrder triggers customLayerOrderChanged
         self._in_layer_add_remove = False  # guard: layer add/remove triggers order changes
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
@@ -167,15 +167,19 @@ class LayerOrderController(QObject):
         Guards:
         - Skip if we're already reconciling (prevents feedback loop).
         - Skip if we're applying (our own _apply_custom_order triggers this
-          signal — we must not reconcile our own changes).
-        - Skip if layers are being added/removed (those trigger order changes
-          that are NOT user reorders in the native panel).
+          signal — we must not reconcile our own changes). Uses a counter
+          instead of a timer — the counter is incremented before
+          setCustomLayerOrder and the signal handler decrements it.
+        - Skip if layers are being added/removed.
+        - Skip if the layer SETS differ (add/remove, not reorder).
         """
         if not self._view.is_control_enabled():
             return
         if self._in_reconcile:
             return
-        if self._in_apply:
+        if self._apply_counter > 0:
+            _log("[C] _on_custom_order_changed: skipped (our own apply)")
+            self._apply_counter -= 1
             return
         if self._in_layer_add_remove:
             return
@@ -721,13 +725,11 @@ class LayerOrderController(QObject):
 
     def _apply_custom_order(self):
         _vlog_method("_apply_custom_order", "[C]")
-        # Set _in_apply so _on_custom_order_changed knows this order change
-        # came from us (not from the user reordering in the native panel).
-        # The flag stays set for 200ms after apply completes to catch
-        # queued customLayerOrderChanged signals (Qt may queue the signal
-        # and fire it on the next event loop iteration, after _in_apply
-        # would have been cleared by the finally block).
-        self._in_apply = True
+        # Increment the counter BEFORE setCustomLayerOrder so that
+        # _on_custom_order_changed knows this order change came from us.
+        # The counter is decremented when the signal fires (synchronously
+        # or queued). This is more reliable than a timer-based guard.
+        self._apply_counter += 1
         try:
             root = QgsProject.instance().layerTreeRoot()
             if not self._view.is_control_enabled():
@@ -735,9 +737,15 @@ class LayerOrderController(QObject):
                 _log("[C] _apply_custom_order: skipped (control unchecked)")
                 return
             # Flatten the Model's layer ids → QgsMapLayer list
+            # Deduplicate — a layer should only appear once in customLayerOrder
             proj = QgsProject.instance()
             layers = []
+            seen_ids = set()
             for layer_id in self._vc.get_flattened_layer_ids():
+                if layer_id in seen_ids:
+                    _log(f"[C] _apply_custom_order: WARNING duplicate layer {layer_id} — skipping", Qgis.Warning)
+                    continue
+                seen_ids.add(layer_id)
                 lyr = proj.mapLayer(layer_id)
                 if lyr:
                     layers.append(lyr)
@@ -751,13 +759,6 @@ class LayerOrderController(QObject):
         except Exception as e:
             _log(f"[C] _apply_custom_order FAILED: {e!r}", Qgis.Critical)
             _log(traceback.format_exc(), Qgis.Critical)
-        finally:
-            # Keep _in_apply True for 200ms to catch queued signals
-            QTimer.singleShot(200, self._clear_in_apply)
-
-    def _clear_in_apply(self):
-        """Clear the _in_apply flag after a short delay."""
-        self._in_apply = False
 
     # ==================================================================
     # External control (plugin.py calls these during project load)
