@@ -2,12 +2,11 @@
 and keyboard undo/redo: one key press, one step."""
 import importlib
 
-from harness import PROJECT, FakeIface, check, finish, pump
-from qgis.core import QgsProject
+from harness import FakeIface, check, finish, open_test_project, pump
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtTest import QTest
 
-QgsProject.instance().read(PROJECT)
+open_test_project()
 package = importlib.import_module("layer_order_plus_qgis4")
 iface = FakeIface()
 edit_menu = iface.mw.menuBar().actions()[0].menu()

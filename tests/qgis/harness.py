@@ -8,7 +8,7 @@ import os
 import sys
 import time
 
-from qgis.core import QgsApplication, QgsProject
+from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
 APP = QgsApplication([], True)
 APP.initQgis()
@@ -16,12 +16,31 @@ APP.initQgis()
 from qgis.PyQt.QtCore import QCoreApplication, QObject, pyqtSignal  # noqa: E402
 from qgis.PyQt.QtWidgets import QMainWindow  # noqa: E402
 
-from layer_order_plus_qgis4.controller import LayerOrderController  # noqa: E402
+from layer_order_plus_qgis4.controller import ENTRY_SCOPE, ENTRY_TREE, LayerOrderController  # noqa: E402
 from layer_order_plus_qgis4.model import GroupNode, LayerOrderModel  # noqa: E402
 from layer_order_plus_qgis4.view import LayerOrderView  # noqa: E402
 from layer_order_plus_qgis4.view_controller import ViewController  # noqa: E402
 
-PROJECT = os.path.join(os.path.dirname(__file__), "..", "data", "test.qgz")
+
+def open_test_project() -> None:
+    """A fresh project like the one the bugs were reported on.
+
+    Layers A–E, Layers panel order E..A (QGIS puts new layers on top), a
+    saved custom order A..E with control OFF, and a saved Plus tree A..E.
+    """
+    proj = QgsProject.instance()
+    proj.clear()
+    layers = [QgsVectorLayer("Point?crs=EPSG:4326", name, "memory") for name in "ABCDE"]
+    for lyr in layers:
+        proj.addMapLayer(lyr, False)
+        proj.layerTreeRoot().insertLayer(0, lyr)
+    root = proj.layerTreeRoot()
+    root.setCustomLayerOrder(layers)
+    root.setHasCustomLayerOrder(False)
+    saved = LayerOrderModel()
+    for lyr in layers:
+        saved.add_layer(lyr.id(), lyr.name())
+    proj.writeEntry(ENTRY_SCOPE, ENTRY_TREE, saved.serialize())
 
 
 class _Canvas:
@@ -69,8 +88,8 @@ class Rig:
     """Model + View + ViewController + Controller on the test project."""
 
     def __init__(self):
+        open_test_project()
         self.project = QgsProject.instance()
-        self.project.read(PROJECT)
         self.root = self.project.layerTreeRoot()
         self.model = LayerOrderModel()
         self.view = LayerOrderView()
