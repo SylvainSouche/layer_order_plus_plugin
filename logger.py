@@ -60,11 +60,18 @@ def _vlog(msg) -> None:
     _log(msg)
 
 
-def _vlog_method(name: str) -> None:
-    """Verbose log a method entry. Call at the top of every method."""
+def _vlog_method(name: str, tag: str = "") -> None:
+    """Verbose log a method entry. Call at the top of every method.
+
+    tag: optional layer identifier — [M] Model, [V] View, [VC] ViewController,
+         [C] Controller, [P] Plugin, [TW] TreeWidget.
+    """
     if not _verbose:
         return
-    _log(f"→ {name}")
+    if tag:
+        _log(f"{tag} → {name}")
+    else:
+        _log(f"→ {name}")
 
 
 def _vlog_method_exit(name: str) -> None:
