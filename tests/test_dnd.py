@@ -1,28 +1,18 @@
-"""Drag-and-drop through the full View ↔ ViewController ↔ Model chain.
+"""View ↔ ViewController ↔ Model, end to end (no QGIS).
 
-Drops are injected at the drop_intent level (what BetterLayerTree emits),
-then we check that the Model has the expected structure AND that the View
-is an exact projection of the Model afterwards.
+Intents are injected the way the View emits them; we then check the Model,
+and that the View is an exact projection of the Model. Tests at the bottom
+check that the View never acts on its own input.
 """
-import os
-import sys
 import types
 
 import pytest
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtTest import QTest
 
-PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PLUGIN_ROOT not in sys.path:
-    sys.path.insert(0, PLUGIN_ROOT)
-if "layer_order_plus_qgis4" not in sys.modules:
-    pkg = types.ModuleType("layer_order_plus_qgis4")
-    pkg.__path__ = [PLUGIN_ROOT]
-    sys.modules["layer_order_plus_qgis4"] = pkg
-
-from PyQt6.QtCore import Qt
-
-from layer_order_plus_qgis4.model import LayerOrderModel, GroupNode, LayerNode
+from layer_order_plus_qgis4.model import GroupNode, LayerNode, LayerOrderModel
 from layer_order_plus_qgis4.tree_utils import ROLE_ID, ROLE_TYPE, TYPE_GROUP, find_group_item, find_layer_item
-from layer_order_plus_qgis4.tree_widget import DROP_ON, DROP_ABOVE, DROP_BELOW, DROP_END
+from layer_order_plus_qgis4.tree_widget import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
 
 
 # ---------- helpers ----------
@@ -58,22 +48,24 @@ def mvc(qapp):
     from layer_order_plus_qgis4.view_controller import ViewController
 
     view = LayerOrderView()
-    view.set_control_enabled(True)
     model = LayerOrderModel()
+    model.set_control_enabled(True)
     vc = ViewController(model, view)
+    requests = []
+    vc.visibility_requested.connect(lambda ids, on: requests.append(("visibility", ids, on)))
+    vc.control_requested.connect(lambda on: requests.append(("control", on)))
 
     def load(spec):
-        with model.block_notifications():
-            model._root = _build(spec)
-        vc._rebuild_view_from_model()
+        model.replace_root(_build(spec))
 
     def drop(moving, target, pos):
-        vc._handle_drop_intent(list(moving), target, pos)
+        vc.handle_drop(list(moving), target, pos)
         shape = _model_shape(model.get_root())
         assert _view_shape(view.tree) == shape, "View diverged from Model"
         return shape
 
-    yield types.SimpleNamespace(view=view, model=model, vc=vc, load=load, drop=drop)
+    yield types.SimpleNamespace(view=view, model=model, vc=vc, load=load, drop=drop,
+                                requests=requests)
     view.deleteLater()
 
 
@@ -109,7 +101,7 @@ def test_move_items_noop_emits_nothing():
     assert events == []
 
 
-# ---------- drops through the ViewController ----------
+# ---------- drops ----------
 
 def test_drop_two_items_above(mvc):
     mvc.load(["A", "B", "C", "D", "E"])
@@ -118,7 +110,6 @@ def test_drop_two_items_above(mvc):
 
 def test_drop_two_items_below(mvc):
     mvc.load(["A", "B", "C", "D", "E"])
-    # Used to give C, A, D, B, E
     assert mvc.drop(["A", "B"], "C", DROP_BELOW) == ["C", "A", "B", "D", "E"]
 
 
@@ -185,37 +176,131 @@ def test_drop_is_one_undo_step(mvc):
     mvc.vc.undo_stack.undo()
     assert _model_shape(mvc.model.get_root()) == ["A", "B", "C", "D"]
     assert _view_shape(mvc.view.tree) == ["A", "B", "C", "D"]
-
-
-def test_drop_keeps_collapsed_groups_collapsed(mvc):
-    mvc.load([("g1", ["A"]), "B", "C"])
-    find_group_item(mvc.view.tree, "g1").setExpanded(False)  # user clicks the arrow
-    assert mvc.model.find_item("g1").expanded is False
-    mvc.drop(["C"], "B", DROP_ABOVE)
-    assert find_group_item(mvc.view.tree, "g1").isExpanded() is False
+    mvc.vc.undo_stack.redo()
+    assert _view_shape(mvc.view.tree) == _model_shape(mvc.model.get_root())
 
 
 def test_drop_reselects_moved_items(mvc):
     mvc.load(["A", "B", "C"])
     mvc.drop(["A"], "C", DROP_BELOW)
-    assert mvc.view.get_selected_item_ids() == ["A"]
+    assert mvc.view.selected_ids() == ["A"]
 
 
-# ---------- visibility echo from tri-state groups ----------
+# ---------- undo never fights QGIS ----------
 
-def test_unchecking_one_child_does_not_recheck_it(mvc):
-    mvc.load([("g1", ["A", "B"])])
-    find_layer_item(mvc.view.tree, "A").setCheckState(0, Qt.CheckState.Unchecked)
+def test_undo_keeps_layers_added_since(mvc):
+    mvc.load(["A", "B", "C"])
+    mvc.drop(["A"], "C", DROP_BELOW)          # B C A
+    mvc.model.add_layer_beside("N", "N", True, "C", after=True)   # QGIS adds N
+    mvc.vc.undo_stack.undo()
+    assert _model_shape(mvc.model.get_root()) == ["A", "B", "C", "N"]
+
+
+def test_undo_does_not_resurrect_removed_layers(mvc):
+    mvc.load(["A", "B", "C"])
+    mvc.drop(["A"], "C", DROP_BELOW)
+    mvc.model.remove_layer("B")                # QGIS removes B
+    mvc.vc.undo_stack.undo()
+    assert _model_shape(mvc.model.get_root()) == ["A", "C"]
+
+
+def test_undo_keeps_current_visibility(mvc):
+    mvc.load(["A", "B"])
+    mvc.drop(["A"], "B", DROP_BELOW)
+    mvc.model.set_visibility("A", False)       # QGIS hides A
+    mvc.vc.undo_stack.undo()
     assert mvc.model.find_item("A").visible is False
-    assert mvc.model.find_item("B").visible is True
     assert find_layer_item(mvc.view.tree, "A").checkState(0) == Qt.CheckState.Unchecked
 
 
-# ---------- BetterLayerTree: moving set ----------
+# ---------- intents that are not Model edits ----------
+
+def test_check_intent_requests_visibility_for_group_layers(mvc):
+    mvc.load([("g1", ["A", ("g2", ["B"])]), "C"])
+    mvc.view.check_requested.emit("g1", False)
+    assert mvc.requests == [("visibility", ["A", "B"], False)]
+    # Nothing changes until QGIS answers through the Model
+    assert find_layer_item(mvc.view.tree, "A").checkState(0) == Qt.CheckState.Checked
+
+
+def test_visibility_rendered_with_group_state(mvc):
+    mvc.load([("g1", ["A", "B"])])
+    mvc.model.set_visibility("A", False)
+    assert find_group_item(mvc.view.tree, "g1").checkState(0) == Qt.CheckState.PartiallyChecked
+    mvc.model.set_visibility("B", False)
+    assert find_group_item(mvc.view.tree, "g1").checkState(0) == Qt.CheckState.Unchecked
+
+
+def test_expand_intent_goes_through_model(mvc):
+    mvc.load([("g1", ["A"]), "B", "C"])
+    mvc.view.tree.expand_intent.emit("g1", False)
+    assert mvc.model.find_item("g1").expanded is False
+    assert find_group_item(mvc.view.tree, "g1").isExpanded() is False
+    mvc.drop(["C"], "B", DROP_ABOVE)           # re-render keeps it collapsed
+    assert find_group_item(mvc.view.tree, "g1").isExpanded() is False
+
+
+def test_control_click_only_requests(mvc):
+    box = mvc.view.chk_control
+    assert box.isChecked()
+    box.click()
+    assert mvc.requests == [("control", False)]
+    assert box.isChecked(), "the box must keep showing the real state"
+    mvc.model.set_control_enabled(False)       # QGIS answered
+    assert not box.isChecked()
+
+
+def test_remove_empty_click_updates_model_setting(mvc):
+    mvc.view.chk_remove_empty.click()
+    assert mvc.model.get_remove_empty_groups() is False
+    assert not mvc.view.chk_remove_empty.isChecked()
+
+
+# ---------- the tree never acts on its own ----------
+
+def _show(mvc):
+    mvc.view.resize(300, 400)
+    mvc.view.show()
+    QTest.qWaitForWindowExposed(mvc.view)
+
+
+def test_checkbox_click_does_not_toggle_item(mvc):
+    mvc.load(["A", "B"])
+    _show(mvc)
+    tree = mvc.view.tree
+    item = find_layer_item(tree, "A")
+    seen = []
+    tree.check_intent.connect(lambda i, on: seen.append((i, on)))
+    from PyQt6.QtWidgets import QStyle, QStyleOptionViewItem
+    opt = QStyleOptionViewItem()
+    index = tree.indexFromItem(item)
+    tree.itemDelegate().initStyleOption(opt, index)
+    opt.rect = tree.visualRect(index)
+    box = tree.style().subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, tree)
+    QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=box.center())
+    assert seen == [("A", False)]
+    assert item.checkState(0) == Qt.CheckState.Checked
+
+
+def test_branch_click_does_not_expand(mvc):
+    mvc.load([("g1", ["A"])])
+    mvc.model.set_expanded("g1", False)
+    _show(mvc)
+    tree = mvc.view.tree
+    seen = []
+    tree.expand_intent.disconnect()            # observe the intent only, nobody acts on it
+    tree.expand_intent.connect(lambda g, on: seen.append((g, on)))
+    item = find_group_item(tree, "g1")
+    rect = tree.visualItemRect(item)
+    QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton,
+                     pos=QPoint(rect.left() - tree.indentation() // 2, rect.center().y()))
+    assert seen == [("g1", True)]
+    assert item.isExpanded() is False
+
 
 def test_moving_items_display_order_and_no_nested(mvc):
     mvc.load([("g1", ["A", "B"]), "C"])
     tree = mvc.view.tree
     for it in (find_layer_item(tree, "C"), find_layer_item(tree, "A"), find_group_item(tree, "g1")):
         it.setSelected(True)
-    assert [it.data(0, ROLE_ID) for it in tree._moving_items()] == ["g1", "C"]
+    assert mvc.view.selected_ids() == ["g1", "C"]

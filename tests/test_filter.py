@@ -1,21 +1,12 @@
 """Tests for the name substring filter (QualityOverhaul 3.3)."""
-import os
-import sys
-
-import pytest
-
-PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PLUGIN_ROOT not in sys.path:
-    sys.path.insert(0, PLUGIN_ROOT)
-
 from layer_order_plus_qgis4.tree_utils import (
     ROLE_TYPE,
     ROLE_ID,
     TYPE_GROUP,
     TYPE_LAYER,
-    new_group_id,
     apply_name_filter,
 )
+from layer_order_plus_qgis4.model import new_group_id
 
 
 def _make_group(name, gid=None):

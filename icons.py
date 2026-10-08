@@ -9,7 +9,7 @@ import os
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QApplication, QStyle
 
-from qgis.core import QgsApplication, QgsIconUtils, QgsVectorLayer
+from qgis.core import QgsApplication, QgsIconUtils, QgsProject, QgsVectorLayer
 
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -154,3 +154,8 @@ def icon_for_layer(layer) -> QIcon:
         return _qt_standard(QStyle.StandardPixmap.SP_FileIcon)
     except Exception:
         return QIcon()
+
+
+def icon_for_layer_id(layer_id: str) -> QIcon:
+    """Icon for a project layer id (generic layer icon if the layer is gone)."""
+    return icon_for_layer(QgsProject.instance().mapLayer(layer_id))

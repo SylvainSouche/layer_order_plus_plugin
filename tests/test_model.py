@@ -571,7 +571,8 @@ def test_serialize_layer_node_shape(model):
     assert layer_node["type"] == "layer"
     assert layer_node["id"] == "l1"
     assert layer_node["name"] == "Layer 1"
-    assert layer_node["visible"] is False
+    # Visibility mirrors QGIS and is never persisted
+    assert "visible" not in layer_node
 
 
 def test_serialize_group_node_shape(model):
@@ -672,8 +673,8 @@ def test_block_notifications_suppresses_emits(model, captured_events):
     with model.block_notifications():
         model.add_layer("l2", "L2")
         model.rename_layer("l1", "Renamed")
-    # No per-node events during block; only a trailing ORDER_CHANGED
-    assert _event_types(captured_events) == [EVENT_ORDER_CHANGED]
+    # No per-node events during block; one resync + ORDER_CHANGED on exit
+    assert _event_types(captured_events) == [EVENT_MODEL_LOADED, EVENT_ORDER_CHANGED]
 
 
 def test_block_notifications_nested(model, captured_events):
@@ -683,8 +684,16 @@ def test_block_notifications_nested(model, captured_events):
         model.add_layer("l2", "L2")
         with model.block_notifications():
             model.add_layer("l3", "L3")
-    # Only one trailing ORDER_CHANGED from the outer block
-    assert _event_types(captured_events) == [EVENT_ORDER_CHANGED]
+    # Only one resync from the outer block
+    assert _event_types(captured_events) == [EVENT_MODEL_LOADED, EVENT_ORDER_CHANGED]
+
+
+def test_block_notifications_display_only_change_resyncs_without_order(model, captured_events):
+    model.add_layer("l1", "L1")
+    captured_events.clear()
+    with model.block_notifications():
+        model.rename_layer("l1", "Renamed")
+    assert _event_types(captured_events) == [EVENT_MODEL_LOADED]
 
 
 def test_block_notifications_no_change_no_emit(model, captured_events):
@@ -731,9 +740,12 @@ def test_get_set_remove_empty_groups(model):
     assert model.get_remove_empty_groups() is True
 
 
-def test_set_remove_empty_groups_no_emit(model, captured_events):
+def test_set_remove_empty_groups_emits_setting_changed(model, captured_events):
     model.set_remove_empty_groups(False)
-    assert captured_events == []  # setting change is not a structural event
+    assert captured_events == [("setting_changed", {"key": "remove_empty_groups", "value": False})]
+    captured_events.clear()
+    model.set_remove_empty_groups(False)
+    assert captured_events == []
 
 
 # ---------- listener registration ----------
@@ -756,3 +768,42 @@ def test_remove_listener_not_registered(model):
     """Removing a listener that was never added should not raise."""
     model.remove_listener(lambda et, p: None)
     assert len(model._listeners) == 0
+
+
+# ---------- queries moved into the Model (1.3.0) ----------
+
+def test_unique_group_name(model):
+    assert model.unique_group_name() == "New group"
+    model.create_group("New group")
+    model.create_group("New group 2")
+    assert model.unique_group_name() == "New group 3"
+    assert model.unique_group_name("Roads") == "Roads"
+
+
+def test_depth_and_descendants(model):
+    g1 = model.create_group("G1")
+    g2 = model.create_group("G2", parent_id=g1)
+    model.add_layer("a", "A", parent_id=g1)
+    model.add_layer("b", "B", parent_id=g2)
+    assert (model.get_depth(g1), model.get_depth(g2), model.get_depth("b")) == (1, 2, 3)
+    assert model.get_depth("nope") == 0
+    assert model.descendant_layer_ids(g1) == ["b", "a"]
+    assert model.descendant_layer_ids("a") == ["a"]
+
+
+def test_add_layer_beside(model):
+    g = model.create_group("G")
+    model.add_layer("a", "A", parent_id=g)
+    model.add_layer_beside("n1", "N1", True, "a", after=False)
+    model.add_layer_beside("n2", "N2", False, "a", after=True)
+    model.add_layer_beside("n3", "N3", True, None, after=True)
+    assert model.descendant_layer_ids(g) == ["n1", "a", "n2"]
+    assert model.get_root()[0].id == "n3"
+    assert model.find_item("n2").visible is False
+
+
+def test_load_from_json_tolerates_garbage(model):
+    model.load_from_json('{"children": [42, {"type": "layer"}, {"type": "group", "children": [{"type": "layer", "id": "x"}]}]}')
+    assert model.get_flattened_layer_ids() == ["x"]
+    model.load_from_json("not json")
+    assert model.get_root() == []
