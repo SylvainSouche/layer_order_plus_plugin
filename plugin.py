@@ -61,7 +61,7 @@ class BetterLayerOrderPlugin(QObject):
     # Plugin lifecycle
     # ==================================================================
     def initGui(self):
-        _vlog_method("initGui")
+        _vlog_method("initGui", "[P]")
         # Toggle action in the plugin menu
         self.action = QAction("Layer Order Plus", self.iface.mainWindow())
         self.action.setCheckable(True)
@@ -109,7 +109,7 @@ class BetterLayerOrderPlugin(QObject):
         QTimer.singleShot(0, self._on_project_read)
 
     def unload(self):
-        _vlog_method("unload")
+        _vlog_method("unload", "[P]")
         # Teardown undo integration
         self._teardown_undo_integration()
 
@@ -146,7 +146,7 @@ class BetterLayerOrderPlugin(QObject):
     # Dock toggle
     # ==================================================================
     def _toggle_dock(self, on):
-        _vlog_method("_toggle_dock")
+        _vlog_method("_toggle_dock", "[P]")
         if self.view is None:
             return
         if on:
@@ -171,13 +171,13 @@ class BetterLayerOrderPlugin(QObject):
     # Project lifecycle
     # ==================================================================
     def _on_project_cleared(self):
-        _vlog_method("_on_project_cleared")
+        _vlog_method("_on_project_cleared", "[P]")
         if self.view_controller:
             self.controller.set_apply_suspended(True)
             self.view_controller.clear()
 
     def _on_project_read(self):
-        _vlog_method("_on_project_read")
+        _vlog_method("_on_project_read", "[P]")
         if not self.view_controller:
             return
         self._loading = True
@@ -223,17 +223,17 @@ class BetterLayerOrderPlugin(QObject):
     # Project I/O (tree JSON persistence)
     # ==================================================================
     def _load_tree_json(self):
-        _vlog_method("_load_tree_json")
+        _vlog_method("_load_tree_json", "[P]")
         return QgsProject.instance().readEntry("BetterLayerOrder", "tree_json", "")[0] or ""
 
     def _save_tree_json(self, raw: str):
-        _vlog_method("_save_tree_json")
+        _vlog_method("_save_tree_json", "[P]")
         proj = QgsProject.instance()
         proj.writeEntry("BetterLayerOrder", "tree_json", raw)
         proj.setDirty(True)
 
     def _mark_dirty(self):
-        _vlog_method("_mark_dirty")
+        _vlog_method("_mark_dirty", "[P]")
         """Mark the project dirty when the order changes (triggers autosave)."""
         if self._loading:
             return
@@ -246,7 +246,7 @@ class BetterLayerOrderPlugin(QObject):
     # Undo integration with QGIS Edit menu
     # ==================================================================
     def _setup_undo_integration(self):
-        _vlog_method("_setup_undo_integration")
+        _vlog_method("_setup_undo_integration", "[P]")
         """Wire the ViewController's undo stack to QGIS Edit menu + app shortcuts.
 
         Actions are added to BOTH the plugin menu AND the main window (so
@@ -300,7 +300,7 @@ class BetterLayerOrderPlugin(QObject):
         self.view_controller.undo_stack.canRedoChanged.connect(self._refresh_undo_actions)
 
     def _find_edit_menu(self):
-        _vlog_method("_find_edit_menu")
+        _vlog_method("_find_edit_menu", "[P]")
         """Find QGIS's Edit menu (QMenuBar → 'Edit' / 'Édition' / etc.)."""
         try:
             mw = self.iface.mainWindow()
@@ -317,7 +317,7 @@ class BetterLayerOrderPlugin(QObject):
         return None
 
     def _add_to_edit_menu(self):
-        _vlog_method("_add_to_edit_menu")
+        _vlog_method("_add_to_edit_menu", "[P]")
         """Add Undo/Redo layer order actions to QGIS's Edit menu."""
         edit_menu = self._find_edit_menu()
         if edit_menu is None:
@@ -331,7 +331,7 @@ class BetterLayerOrderPlugin(QObject):
             pass
 
     def _teardown_undo_integration(self):
-        _vlog_method("_teardown_undo_integration")
+        _vlog_method("_teardown_undo_integration", "[P]")
         if self._filter_installed:
             try:
                 self.iface.mainWindow().removeEventFilter(self)
@@ -360,12 +360,12 @@ class BetterLayerOrderPlugin(QObject):
             self._undo_group = None
 
     def _redo_with_fallback(self):
-        _vlog_method("_redo_with_fallback")
+        _vlog_method("_redo_with_fallback", "[P]")
         if self._undo_group and self._undo_group.canRedo():
             self._undo_group.redo()
 
     def _refresh_undo_actions(self):
-        _vlog_method("_refresh_undo_actions")
+        _vlog_method("_refresh_undo_actions", "[P]")
         if self._act_undo is None or self._undo_group is None:
             return
         can_undo = self._undo_group.canUndo()
@@ -377,7 +377,7 @@ class BetterLayerOrderPlugin(QObject):
         self._act_redo_alt.setEnabled(can_redo and not editing)
 
     def _is_editing_layer(self):
-        _vlog_method("_is_editing_layer")
+        _vlog_method("_is_editing_layer", "[P]")
         """Return True if any vector layer is currently in edit mode."""
         try:
             for lyr in QgsProject.instance().mapLayers().values():
@@ -409,7 +409,7 @@ class BetterLayerOrderPlugin(QObject):
             # Only intercept when NO vector layer is being edited (digitizing
             # undo takes priority when editing features).
             if (is_undo or is_redo_y or is_redo_shift) and not self._is_editing_layer():
-                _vlog_method("eventFilter")
+                _vlog_method("eventFilter", "[P]")
                 if is_undo and self._undo_group and self._undo_group.canUndo():
                     _log(f"eventFilter: intercepting Ctrl+Z → undo")
                     event.accept()

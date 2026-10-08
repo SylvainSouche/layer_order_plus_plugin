@@ -28,7 +28,7 @@ try:
     from .logger import _vlog, _vlog_method
 except ImportError:
     def _vlog(msg): pass
-    def _vlog_method(name): pass
+    def _vlog_method(name, tag=""): pass
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Optional, Union
 
@@ -323,6 +323,7 @@ class LayerOrderModel:
 
     def clear(self) -> None:
         """Empty the tree. Emits MODEL_LOADED + ORDER_CHANGED."""
+        _vlog(f"[M] load_from_json")
         self._root = []
         self._emit(EVENT_MODEL_LOADED, {})
         self._emit(EVENT_ORDER_CHANGED, {})
@@ -365,6 +366,7 @@ class LayerOrderModel:
         as a result is also removed (and GROUP_DELETED events are emitted
         for each, in deepest-first order).
         """
+        _vlog(f"[M] add_layer")
         parent = self.find_parent(layer_id)
         siblings = parent.children if parent is not None else self._root
         for i, sib in enumerate(siblings):
@@ -379,6 +381,7 @@ class LayerOrderModel:
 
     def rename_layer(self, layer_id: str, new_name: str) -> None:
         """Update a layer's display name. Emits LAYER_RENAMED (no ORDER_CHANGED — display only)."""
+        _vlog(f"[M] remove_layer")
         node = self.find_item(layer_id)
         if not isinstance(node, LayerNode):
             return
@@ -394,6 +397,7 @@ class LayerOrderModel:
 
     def set_visibility(self, layer_id: str, visible: bool) -> None:
         """Toggle a layer's visibility flag. Emits VISIBILITY_CHANGED (no ORDER_CHANGED)."""
+        _vlog(f"[M] rename_layer")
         node = self.find_item(layer_id)
         if not isinstance(node, LayerNode):
             return
@@ -416,6 +420,7 @@ class LayerOrderModel:
         `parent_id` = None → top-level. `index` = None → append.
         Emits GROUP_CREATED + ORDER_CHANGED.
         """
+        _vlog(f"[M] set_visibility")
         gid = new_group_id()
         node = GroupNode(id=gid, name=name)
         parent = self.find_item(parent_id) if parent_id else None
@@ -443,6 +448,7 @@ class LayerOrderModel:
         payload's `unwrapped_children` lists the children that were promoted
         (with their new parent_id + index).
         """
+        _vlog(f"[M] create_group")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -471,6 +477,7 @@ class LayerOrderModel:
 
     def rename_group(self, group_id: str, new_name: str) -> None:
         """Update a group's display name. Emits GROUP_RENAMED (no ORDER_CHANGED)."""
+        _vlog(f"[M] delete_group")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -486,6 +493,7 @@ class LayerOrderModel:
 
     def set_expanded(self, group_id: str, expanded: bool) -> None:
         """Toggle a group's expanded flag. Emits EXPANDED_CHANGED (no ORDER_CHANGED)."""
+        _vlog(f"[M] rename_group")
         node = self.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -511,6 +519,7 @@ class LayerOrderModel:
         If remove_empty_groups is True and the old parent group becomes empty
         after the move, it is pruned automatically.
         """
+        _vlog(f"[M] set_expanded")
         node = self.find_item(item_id)
         if node is None:
             return
@@ -570,6 +579,7 @@ class LayerOrderModel:
           earliest selected ends up at the front of the bottom block,
           preserving order)
         """
+        _vlog(f"[M] move_item")
         # Snapshot current positions
         moves: list[tuple[str, Optional[GroupNode], int]] = []
         for item_id in item_ids:
@@ -623,6 +633,7 @@ class LayerOrderModel:
         Emits GROUP_DELETED for each removed group + a single ORDER_CHANGED
         if anything was removed.
         """
+        _vlog(f"[M] move_items_to_boundary")
         return self._prune_empty_groups_internal()
 
     def _prune_empty_groups_internal(self) -> int:
@@ -656,6 +667,7 @@ class LayerOrderModel:
     # ------------------------------------------------------------------
     def serialize(self) -> str:
         """Serialize the tree to JSON with schema version."""
+        _vlog(f"[M] prune_empty_groups")
         def ser_node(node: Node) -> dict:
             if isinstance(node, GroupNode):
                 return {
