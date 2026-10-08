@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
   pull_request:
-    branches: [main, master]
 
 jobs:
   check:
@@ -19,11 +17,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install zip
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq zip
+      - name: Install system deps (zip + libegl1 for PyQt6 headless)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zip libegl1 libgl1 libglib2.0-0 libfontconfig1
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 pytest ruff
+
+      - name: Lint
+        run: ruff check .
 
       - name: Validate metadata, VERSION, syntax, Qt6 patterns
         run: python3 scripts/check_plugin.py
+
+      - name: Run unit tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: make test
 
       - name: Build versioned zip
         run: |

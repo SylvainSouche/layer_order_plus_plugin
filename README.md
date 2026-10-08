@@ -1,141 +1,62 @@
-# Layer Order Plus (QGIS 4 fork)
+# Layer Order Plus (QGIS 4)
 
-**Kinda like the Layer Order panel, but with grouping.**
+**QGIS's Layer Order panel, with groups.**
 
-This repository is a maintained fork of the original **Layer Order Plus** plugin, updated for **QGIS 4 / PyQt6**, with bug fixes and documentation.
+Organise the map's drawing order in folders — *order groups* that exist
+only for the drawing order, independent of the Layers panel. Top of the
+list draws on top of the map.
 
 | | |
 |---|---|
-| **Current version** | See [`VERSION`](VERSION) (source of truth) |
-| **Validated target** | **1.1.0** (after test pass) |
-| **QGIS** | 4.x (this fork). Original upstream targeted 3.16–3.99. |
+| **Version** | [`VERSION`](VERSION) (synced into `metadata.txt`) |
+| **QGIS** | 4.x (PyQt6) |
 | **License** | MIT |
 
----
+## Features
 
-## Origin (v1.0.0)
+* Order groups, nested, created from a selection or by dropping one layer
+  onto another; rename, delete, expand/collapse.
+* Drag and drop of any selection, keeping its on-screen order.
+* Two-way sync with QGIS: Layers-panel visibility, layers added / removed /
+  renamed, the "Control rendering order" switch, and moves made in QGIS's
+  own Layer Order panel (groups are kept consistent).
+* Undo / redo (Edit menu, Ctrl+Z / Ctrl+Y) that never fights QGIS:
+  digitizing undo keeps priority, layers QGIS owns are never undone.
+* Saved with the project.
 
-The first public release is the upstream plugin by **Samuel Kultz (Kultz Engenharia)**:
-
-| | |
-|---|---|
-| **Upstream repo** | https://github.com/samkultz/layer_order_plus_plugin |
-| **Plugin directory** | https://plugins.qgis.org/plugins/layer_order_plus/ |
-| **Baseline version** | **1.0.0** — initial release (groups in a Layer Order–style panel; experimental) |
-
-**v1.0.0** introduced:
-
-- A dock similar to the stock **Layer Order** panel  
-- Create / delete **order groups** (for organising draw order only)  
-- Sync of flattened order with QGIS `customLayerOrder`  
-- Project persistence of the tree  
-
-Known limits at 1.0.0 (from upstream changelog): visibility toggles not implemented; **not compatible with QGIS 4** as published (PyQt5-style imports).
-
-This fork keeps that design and extends it for QGIS 4.
-
----
-
-## What this fork changes
-
-### Compatibility (required for QGIS 4)
-
-- `QUndoCommand` / `QUndoStack` imported from `QtGui` (not `QtWidgets`)
-- Qt6 scoped enums (`Qt.ItemDataRole.UserRole`, drop indicator positions, selection/drag modes, `StandardKey`, `DockWidgetArea`, …)
-- `QAction` from `QtGui`
-
-Without these, the plugin fails to load on QGIS 4 with errors such as missing `QUndoCommand` or `Qt.UserRole`.
-
-### Behaviour fixes
-
-| Issue | Fix |
-|-------|-----|
-| **Undo only restored the panel tree**, not the map Z-order | Undo calls `_apply_now_force()` so `setCustomLayerOrder` runs even while `_in_undo` is set |
-| Empty / unclear apply when custom order list is empty | Apply keeps `hasCustomLayerOrder=True` once the panel drives order |
-
-### UX
-
-- **Folder icon** on order groups  
-- **Real layer-type icons** via `QgsIconUtils.iconForLayer` (point / line / polygon / raster / …)
-
-### Packaging & docs
-
-- [`VERSION`](VERSION) — single source of truth for the release number  
-- [`Makefile`](Makefile) — `make zip` → `layer_order_plus_qgis4-<VERSION>.zip`  
-- [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) — user & developer guide  
-- [`docs/TEST_SCENARIO.md`](docs/TEST_SCENARIO.md) — full manual test plan  
-- [`docs/QUALITY_OVERHAUL.md`](docs/QUALITY_OVERHAUL.md) — review findings and remaining work toward **1.1.0**
-
----
-
-## Version history
-
-| Version | Notes |
-|---------|--------|
-| **1.0.0** | Upstream original (Samuel Kultz). QGIS 3-oriented; groups + order panel. |
-| **1.0.1** | Import fix for `QUndoCommand` / `QUndoStack` on PyQt6; `qgisMaximumVersion` for QGIS 4. |
-| **1.0.2** | Full Qt6 enum migration. |
-| **1.0.3** | Undo restores **map** custom layer order, not only the tree UI. |
-| **1.0.4** | Group folder + layer type icons; documentation suite. |
-| **1.0.12** | `VERSION` + `Makefile`; versioned zip name. **Current.** |
-| **1.1.0** | *(planned)* After validation of the test scenario; cleanup items in the quality overhaul plan. |
-
-Always read the number in [`VERSION`](VERSION) and the `version=` field in `metadata.txt` (kept in sync by `make sync`).
-
----
+User guide: [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md).
 
 ## Install
 
-1. Build (optional): from this directory, `make zip`  
-2. In QGIS 4: **Plugins → Manage and Install Plugins → Install from ZIP**  
-3. Choose `layer_order_plus_qgis4-<version>.zip`  
-4. Enable **Layer Order Plus**
+1. `make zip` → `dist/layer_order_plus_qgis4-<VERSION>.zip`
+2. QGIS: **Plugins → Manage and Install Plugins → Install from ZIP**
 
-Or clone this repo into your profile’s `python/plugins/` folder (folder name must match what QGIS expects for the plugin package).
-
----
-
-## Usage (short)
-
-1. Open the **Layer Order Plus** dock.  
-2. **Create group** / **Delete group** to organise the order list (folder icons = groups).  
-3. Drag layers and groups to set draw order (top of the tree = drawn on top).  
-4. **Ctrl+Z** / **Ctrl+Y** undo/redo (dock focused): restores panel **and** map order.  
-5. Save the project to persist groups and order (`BetterLayerOrder` / `tree_json`).
-
-Order groups in this panel are **not** Layers-panel groups; they only structure the custom draw-order list.
-
----
-
-## Build
+## Develop
 
 ```bash
-# Show version (from ./VERSION)
-make show-version
-
-# Write VERSION into metadata.txt and build:
-#   ../layer_order_plus_qgis4-<VERSION>.zip
-make zip
-
-make clean   # remove versioned zips in parent directory
+make test        # unit tests (PyQt6 + pytest, no QGIS needed)
+make qgis-test   # end-to-end checks in a real headless QGIS (macOS: /Applications/QGIS*.app or $QGIS_APP)
+make lint        # ruff
+make check       # metadata / packaging checks
+make zip         # versioned plugin zip in dist/
 ```
 
-To bump a release:
+The code is a strict model / view / controller split — the View only
+renders and reports intents, the Controller is the only piece that talks to
+QGIS. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before changing it.
+Manual acceptance: [`docs/TEST_SCENARIO.md`](docs/TEST_SCENARIO.md).
 
-```bash
-echo 1.0.6 > VERSION   # or 1.1.0 when validated
-make zip
-```
+To release: bump [`VERSION`](VERSION), add a line to the `changelog` in
+`metadata.txt`, `make zip`.
 
----
+## History
 
-## Credits
+* **1.0.0** — original plugin by **Samuel Kultz (Kultz Engenharia)**:
+  https://github.com/samkultz/layer_order_plus_plugin ·
+  https://plugins.qgis.org/plugins/layer_order_plus/ (QGIS 3).
+* **1.0.x – 1.1.0** — this fork: QGIS 4 / PyQt6 port, undo restoring the
+  map order, icons, visibility, persistence schema.
+* **1.2.x** — rewritten as a model / view / controller design; sync with
+  QGIS's Layer Order panel. Details in the `changelog` of `metadata.txt`.
 
-- **Original plugin (v1.0.0):** Samuel Kultz (Kultz Engenharia) — https://github.com/samkultz/layer_order_plus_plugin  
-- **This fork:** QGIS 4 port, fixes, packaging, docs — https://github.com/SylvainSouche/layer_order_plus_plugin  
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+Fork: https://github.com/SylvainSouche/layer_order_plus_plugin · MIT — see [`LICENSE`](LICENSE).

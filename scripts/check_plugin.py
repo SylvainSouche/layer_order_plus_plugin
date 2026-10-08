@@ -58,9 +58,30 @@ def check_metadata(expected_version: str) -> None:
         return
 
     g = cp["general"]
-    for key in ("name", "qgisMinimumVersion", "description", "version", "author", "email"):
+    # Required by plugins.qgis.org (PyQGIS cookbook, plugin metadata table)
+    for key in ("name", "qgisMinimumVersion", "description", "about", "version",
+                "author", "email", "repository"):
         if key not in g or not str(g[key]).strip():
             err(f"metadata.txt missing required key: {key}")
+
+    if not raw.isascii():
+        err("metadata.txt must be ASCII")
+    if "supportsQt6" in g:
+        err("supportsQt6 is obsolete (QGIS 4 compatibility comes from qgisMaximumVersion)")
+    category = g.get("category", "").strip()
+    if category and category not in ("Raster", "Vector", "Database", "Mesh", "Web"):
+        err(f"invalid category {category!r} (Raster, Vector, Database, Mesh or Web; omit for Plugins)")
+    for key in ("qgisMinimumVersion", "qgisMaximumVersion"):
+        value = g.get(key, "").strip()
+        if value and not re.fullmatch(r"\d+\.\d+(\.\d+)?", value):
+            err(f"{key} must be dotted numbers, got {value!r}")
+    major_min = int((g.get("qgisMinimumVersion", "0").split(".") or ["0"])[0] or 0)
+    if major_min < 4:
+        err("qgisMinimumVersion must be >= 4.0: the code is Qt6/PyQt6-only")
+    if not (ROOT / "LICENSE").is_file():
+        err("LICENSE (no extension) is mandatory for plugins.qgis.org")
+    if "plugin" in g.get("name", "").lower():
+        warn("plugin name should not contain the word 'plugin'")
 
     meta_ver = g.get("version", "").strip()
     if expected_version and meta_ver != expected_version:
@@ -80,7 +101,8 @@ def check_metadata(expected_version: str) -> None:
     elif icon:
         ok(f"icon present: {icon}")
 
-    ok(f"qgisMinimumVersion={g.get('qgisMinimumVersion')} qgisMaximumVersion={g.get('qgisMaximumVersion', '')}")
+    ok(f"qgisMinimumVersion={g.get('qgisMinimumVersion')} "
+       f"qgisMaximumVersion={g.get('qgisMaximumVersion', '')}")
 
 
 def check_python_syntax() -> None:
@@ -93,9 +115,8 @@ def check_python_syntax() -> None:
 
 
 def check_qt6_patterns() -> None:
-    for path in (ROOT / "dock.py", ROOT / "plugin.py"):
-        if not path.is_file():
-            continue
+    py_files = sorted(ROOT.glob("*.py"))
+    for path in py_files:
         text = path.read_text(encoding="utf-8")
         if re.search(
             r"from\s+qgis\.PyQt\.QtWidgets\s+import\s+\([^)]*QUndo(Command|Stack|Group)",
@@ -107,23 +128,22 @@ def check_qt6_patterns() -> None:
             err(f"{path.name}: use Qt.DockWidgetArea.LeftDockWidgetArea")
         if "Qt.UserRole" in text and "ItemDataRole" not in text:
             warn(f"{path.name}: Qt.UserRole without ItemDataRole")
-    dock = ROOT / "dock.py"
-    if dock.is_file():
-        t = dock.read_text(encoding="utf-8")
-        if "QUndoCommand" in t and "QtGui" in t:
-            ok("dock.py: QUndo* via QtGui")
-        if "ItemDataRole" in t:
-            ok("dock.py: ItemDataRole used")
-        if "_icon_group" in t and "_icon_for_layer" in t:
-            ok("dock.py: icon helpers present")
 
 
 def check_required_files() -> None:
-    for name in ("__init__.py", "plugin.py", "dock.py", "metadata.txt", "VERSION", "LICENSE"):
+    # Core files always required
+    for name in ("__init__.py", "plugin.py", "metadata.txt", "VERSION", "LICENSE"):
         if (ROOT / name).is_file():
             ok(f"file {name}")
         else:
             err(f"missing required file: {name}")
+    # Refactored modules (1.0.26+)
+    for name in ("model.py", "view.py", "view_controller.py", "controller.py", "reconcile.py",
+                 "tree_model.py", "tree_view.py", "icons.py", "undo.py", "logger.py"):
+        if (ROOT / name).is_file():
+            ok(f"file {name}")
+        else:
+            err(f"missing refactored module: {name}")
 
 
 def main() -> int:
