@@ -203,35 +203,31 @@ class LayerOrderController(QObject):
         _vlog_method("_reconcile_order_with_qgis")
         """Reconcile the Model's tree to match QGIS's flat order.
 
-        NEW ALGORITHM (user-confirmed 1.2.15):
+        RECURSIVE CONTIGUITY ALGORITHM (1.2.16):
 
-        Group membership is determined by CONTIGUITY in the flat order.
-        The tree is rebuilt from the flat order + existing group definitions:
+        The tree is rebuilt recursively from the flat order + existing
+        group structure. At each level:
 
-        - Walk the flat QGIS order.
-        - For each group, check if its layers form a contiguous block in
-          the flat order. If yes → the group survives; any layers that
-          appear between the group's first and last layer become children
-          of that group (they were "dropped into" the group).
-        - Layers outside any group's contiguous block are top-level (or
-          inside the nearest enclosing group if nested).
-        - Groups whose layers are NOT contiguous are preserved but their
-          children are reordered to match the flat order. Layers from
-          outside that end up between the group's children become members.
+        1. Walk the flat order slice for this level.
+        2. For each existing child group at this level, find the min/max
+           position of its DIRECT leaf children (not nested) in the flat
+           order. This defines the group's "span" at this level.
+        3. Layers between a group's min and max → belong to that group.
+        4. Layers outside any group's span → stay at this level.
+        5. Recurse into each group to rebuild its children.
+
+        Key insight: we use DIRECT children (not all descendants) to
+        compute spans. This respects nesting: a parent group's span is
+        determined by its top-level children (which include subgroups),
+        not by deeply nested layers.
 
         Rules (from user):
         1. Moving layers within a group → reorder leaves, group untouched.
-        2. Moving a layer adjacent to a group (not between its children)
-           → sibling of the group, NOT a child.
-        3. Moving a layer between a group's children → becomes part of
-           that group.
-        4. Moving a layer out from between a group's children → leaves
-           the group.
-        5. Empty groups are NOT pruned (only the "remove empty groups on
-           layer delete" setting prunes, and this is a reorder not a delete).
-
-        No warning popup is shown — the reconciliation is automatic and
-        non-destructive (groups are never deleted).
+        2. Moving a layer adjacent to a group → sibling, NOT a child.
+        3. Moving a layer between a group's children → becomes part of group.
+        4. Moving a layer out from between group's children → leaves the group.
+        5. Empty groups preserved (reorder is not a delete).
+        6. No warning popup — automatic, non-destructive.
         """
         from .model import GroupNode, LayerNode
         model = self._vc._model
@@ -239,57 +235,8 @@ class LayerOrderController(QObject):
         _log(f"_reconcile: qgis_order={qgis_order}")
         _log(f"_reconcile: before, our_order={self._vc.get_flattened_layer_ids()}")
 
-        # Step 1: collect all groups (id → set of descendant layer ids)
-        # from the current Model tree.
-        all_groups = {}  # group_id → set of layer_ids currently inside
-        def collect_groups(node):
-            if isinstance(node, GroupNode):
-                lids = set()
-                def walk(n):
-                    if isinstance(n, LayerNode):
-                        lids.add(n.id)
-                    elif isinstance(n, GroupNode):
-                        for ch in n.children:
-                            walk(ch)
-                walk(node)
-                all_groups[node.id] = lids
-                for ch in node.children:
-                    collect_groups(ch)
-        for top in model.get_root():
-            collect_groups(top)
-
-        # Step 2: for each group, find the min and max position of its
-        # current layers in qgis_order. Layers that fall between min and
-        # max (inclusive) belong to that group.
-        group_ranges = {}  # group_id → (min_pos, max_pos)
-        for gid, lids in all_groups.items():
-            positions = [qgis_order.index(lid) for lid in lids if lid in qgis_order]
-            if positions:
-                group_ranges[gid] = (min(positions), max(positions))
-
-        # Step 3: assign each layer in qgis_order to a group (or top-level).
-        # A layer belongs to the INNERMOST group whose range contains it.
-        # For nested groups, we need to check parent-child relationships.
-        layer_to_group = {}  # layer_id → group_id (innermost containing group)
-        for i, lid in enumerate(qgis_order):
-            # Find all groups whose range contains this position
-            containing = []
-            for gid, (gmin, gmax) in group_ranges.items():
-                if gmin <= i <= gmax:
-                    containing.append(gid)
-            if not containing:
-                layer_to_group[lid] = None  # top-level
-            elif len(containing) == 1:
-                layer_to_group[lid] = containing[0]
-            else:
-                # Multiple groups contain this position → pick the innermost
-                # (the one whose range is smallest = most specific)
-                containing.sort(key=lambda g: group_ranges[g][1] - group_ranges[g][0])
-                layer_to_group[lid] = containing[0]
-
-        # Step 4: rebuild the tree from the flat order + group assignments.
-        # Preserve group metadata (id, name, expanded) from the current Model.
-        group_meta = {}  # group_id → (name, expanded)
+        # Collect group metadata (id → (name, expanded)) for preservation
+        group_meta = {}
         def collect_meta(node):
             if isinstance(node, GroupNode):
                 group_meta[node.id] = (node.name, node.expanded)
@@ -298,40 +245,122 @@ class LayerOrderController(QObject):
         for top in model.get_root():
             collect_meta(top)
 
-        # Build new tree: walk qgis_order, group consecutive layers that
-        # belong to the same group.
-        new_root = []
-        i = 0
-        while i < len(qgis_order):
-            lid = qgis_order[i]
-            gid = layer_to_group.get(lid)
-            if gid is None:
-                # Top-level layer
-                lyr = QgsProject.instance().mapLayer(lid)
-                name = lyr.name() if lyr else lid
-                new_root.append(LayerNode(id=lid, name=name))
-                i += 1
-            else:
-                # Collect all consecutive layers belonging to this group
-                group_layer_ids = []
-                while i < len(qgis_order) and layer_to_group.get(qgis_order[i]) == gid:
-                    group_layer_ids.append(qgis_order[i])
-                    i += 1
-                # Build the group node
-                name, expanded = group_meta.get(gid, ("Group", True))
-                children = []
-                for glid in group_layer_ids:
-                    lyr = QgsProject.instance().mapLayer(glid)
-                    lname = lyr.name() if lyr else glid
-                    children.append(LayerNode(id=glid, name=lname))
-                new_root.append(GroupNode(id=gid, name=name, expanded=expanded,
-                                          children=children))
+        # Get layer names from QGIS
+        proj = QgsProject.instance()
+        layer_names = {}
+        for lid in qgis_order:
+            lyr = proj.mapLayer(lid)
+            layer_names[lid] = lyr.name() if lyr else lid
 
-        # Step 5: replace the Model's root + rebuild the View
+        # Recursive rebuild
+        new_root = self._rebuild_level(
+            qgis_order, 0, len(qgis_order),
+            model.get_root(), group_meta, layer_names
+        )
+
         with model.block_notifications():
             model._root = new_root
         self._vc._rebuild_view_from_model()
         _log(f"_reconcile: after, our_order={self._vc.get_flattened_layer_ids()}")
+
+    def _rebuild_level(self, qgis_order, start, end, current_children,
+                       group_meta, layer_names):
+        """Rebuild one level of the tree from qgis_order[start:end].
+
+        current_children: the current children at this level (from the old tree).
+        Returns a list of LayerNode / GroupNode for this level.
+
+        For each existing group at this level, we compute its span based on
+        ALL its direct children (both layers and subgroups). For subgroups,
+        we compute their span first (recursively), so the parent's span
+        correctly covers the subgroup's entire block.
+        """
+        from .model import GroupNode, LayerNode
+
+        # Step 1: compute spans for all groups at this level.
+        # A group's span is [min, max] of all its direct children's positions.
+        # For direct LayerNode children → their position in qgis_order.
+        # For direct GroupNode children → we need their span first (recurse
+        # to compute it). We do this bottom-up: process innermost groups first.
+
+        # Collect groups at this level
+        groups_here = [child for child in current_children if isinstance(child, GroupNode)]
+
+        # For each group, collect the positions of its DIRECT children
+        # (both layers and subgroups). For subgroups, recursively compute
+        # their span first.
+        group_spans = {}  # group_id → (min_pos, max_pos)
+
+        def compute_group_span(group_node):
+            """Compute the span of a group based on its direct children.
+            Recursively computes subgroup spans first."""
+            positions = []
+            for ch in group_node.children:
+                if isinstance(ch, LayerNode):
+                    if ch.id in qgis_order:
+                        pos = qgis_order.index(ch.id)
+                        if start <= pos < end:
+                            positions.append(pos)
+                elif isinstance(ch, GroupNode):
+                    # Recursively compute subgroup's span
+                    sub_span = compute_group_span(ch)
+                    if sub_span is not None:
+                        positions.extend(sub_span)
+            if positions:
+                return (min(positions), max(positions))
+            return None
+
+        for grp in groups_here:
+            span = compute_group_span(grp)
+            if span is not None:
+                group_spans[grp.id] = span
+
+        # Step 2: walk qgis_order[start:end] and assign each layer to a group
+        # or to this level. Sort groups by min position so we process them
+        # in order (groups at the same level don't overlap).
+        sorted_groups = sorted(group_spans.items(), key=lambda x: x[1][0])
+
+        result = []
+        i = start
+        while i < end:
+            lid = qgis_order[i]
+            # Find which group (at this level) this layer belongs to
+            assigned_group = None
+            for gid, (gmin, gmax) in sorted_groups:
+                if gmin <= i <= gmax:
+                    assigned_group = gid
+                    break
+
+            if assigned_group is None:
+                # This layer stays at the current level
+                result.append(LayerNode(id=lid, name=layer_names.get(lid, lid)))
+                i += 1
+            else:
+                # This layer is inside a group's span.
+                # Take everything from i to the group's max position.
+                gmin, gmax = group_spans[assigned_group]
+                group_end = gmax + 1  # exclusive
+
+                # Get the group's current children (for recursion)
+                old_group_node = None
+                for child in current_children:
+                    if isinstance(child, GroupNode) and child.id == assigned_group:
+                        old_group_node = child
+                        break
+
+                # Recurse: rebuild the group's children from the slice
+                old_children = old_group_node.children if old_group_node else []
+                new_children = self._rebuild_level(
+                    qgis_order, i, group_end,
+                    old_children, group_meta, layer_names
+                )
+
+                name, expanded = group_meta.get(assigned_group, ("Group", True))
+                result.append(GroupNode(id=assigned_group, name=name,
+                                        expanded=expanded, children=new_children))
+                i = group_end
+
+        return result
 
     def _find_conflicting_groups(self, qgis_order):
         """Return list of group_ids whose layers are NOT contiguous in qgis_order.
