@@ -3,8 +3,10 @@ and keyboard undo/redo: one key press, one step."""
 import importlib
 
 from harness import FakeIface, check, finish, open_test_project, pump
+from qgis.core import QgsProject
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtTest import QTest
+from qgis.PyQt.QtWidgets import QDockWidget
 
 open_test_project()
 package = importlib.import_module("layer_order_plus_qgis4")
@@ -33,6 +35,22 @@ for _ in range(2):
     QTest.keyClick(plugin.view.tree, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
     pump()
     check(stack.index() == before, "Ctrl+Y redoes exactly one step")
+    # The dock must survive being tabbed behind another panel and a project
+    # being closed/reopened (it used to close itself on visibilityChanged)
+    other = QDockWidget("Other panel", iface.mw)
+    iface.mw.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, other)
+    iface.mw.tabifyDockWidget(plugin.view, other)
+    other.show()
+    other.raise_()
+    pump()
+    QgsProject.instance().clear()
+    open_test_project()
+    iface.projectRead.emit()
+    pump()
+    plugin.view.raise_()
+    pump()
+    check(plugin.view.isVisible(), "dock closed itself after being tabbed / project closed")
+    iface.mw.removeDockWidget(other)
     plugin.unload()
     pump()
     check(len(edit_menu.actions()) == 0, "Edit menu cleaned on unload")

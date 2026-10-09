@@ -70,6 +70,8 @@ class LayerOrderView(QDockWidget):
 
     def __init__(self, parent=None):
         super().__init__("Layer Order Plus", parent)
+        # Lets QGIS save and restore the dock's place and visibility
+        self.setObjectName("LayerOrderPlusDock")
         self.item_model = LayerOrderItemModel(self)
         self._build_ui()
         self._connect_signals()
