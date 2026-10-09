@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run the in-QGIS checks (tests/qgis/check_*.py) with QGIS's own Python.
+# Run the in-QGIS checks (tests/qgis/check_*.py) with QGIS's own Python,
+# or one script with --script FILE (e.g. tests/data/make_test_project.py).
 #
 # QGIS is found via $QGIS_APP (macOS .app bundle) or the newest
 # /Applications/QGIS*.app. Each check runs headless in its own process.
@@ -21,6 +22,11 @@ export PYTHONHOME="$C/Resources"
 export PYTHONPATH="$C/Resources/$PYVER:$C/Resources/$PYVER/site-packages:$C/Resources/$PYVER/lib-dynload:$PKG_ROOT:$PLUGIN_DIR/tests/qgis"
 export QGIS_PREFIX_PATH="$C/MacOS"
 export QT_QPA_PLATFORM=offscreen
+
+# --script FILE: run one script with QGIS's Python instead of the checks
+if [ "${1:-}" = "--script" ]; then
+    exec "$PY" "$2"
+fi
 
 status=0
 for check in "$PLUGIN_DIR"/tests/qgis/check_*.py; do

@@ -143,8 +143,12 @@ selected blocks move together and nothing ever leaves its group.
   (uses `$QGIS_APP` or the newest `/Applications/QGIS*.app`): the full
   user scenario, QGIS Layer Order panel drags with the event loop running
   between its two steps, the native panel's display after toggling
-  control, a reopened project staying unmodified, and plugin load/unload
-  + keyboard undo.
+  control, a reopened project staying unmodified, plugin load/unload
+  + keyboard undo, the manual-test data really showing the order on the
+  map, and a headless replay of `docs/TEST_SCENARIO.md` sections 1–7
+  asserting each step's Plus / Native / Map expectations.
+* `make test-data` — regenerates the manual-test project
+  (`tests/data/make_test_project.py`).
 * `make lint` — ruff.
 
 ## Packaging

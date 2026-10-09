@@ -92,6 +92,7 @@ class LayerOrderController(QObject):
         return [
             (proj.layersAdded, self._on_layers_added),
             (proj.layersWillBeRemoved, self._on_layers_removed),
+            (proj.aboutToBeCleared, self._on_project_about_to_be_cleared),
             (proj.cleared, self._on_project_cleared),
             (self._iface.projectRead, self.load_project),
             (self._iface.newProjectCreated, self.load_project),
@@ -141,10 +142,18 @@ class LayerOrderController(QObject):
     # ==================================================================
     # Project lifecycle
     # ==================================================================
-    def _on_project_cleared(self) -> None:
+    def _on_project_about_to_be_cleared(self) -> None:
+        """Closing / replacing the project: QGIS removes all its layers next.
+
+        Those removals must not be mirrored: the Model would be edited and
+        the leftover tree saved into the project being opened, which then
+        inherited the previous project's groups.
+        """
         self._apply_timer.stop()
         self._pending_layers.clear()
         self._loading = True
+
+    def _on_project_cleared(self) -> None:
         try:
             self._model.clear()
         finally:
