@@ -6,7 +6,11 @@ messages hold the full reasoning behind each fix.
 
 ## 1.3 — Move up / move down; review completed: strict MVC, Qt model/view tree, sync with QGIS's Layer Order panel, packaging for plugins.qgis.org
 
-*1.3.0*
+*1.3.0 – 1.3.1*
+
+* **1.3.1** — The panel no longer closes itself when a project is closed or when it is tabbed behind another panel (the plugin-menu toggle reacted to "hidden" as if it meant "closed"; it is now the dock's own toggle action). The dock has an object name, so QGIS restores its place and visibility between sessions.
+
+**1.3.0**
 
 * Move up / Move down (toolbar, context menu, Ctrl+↑ / Ctrl+↓): each selected item swaps with the nearest unselected sibling, blocks move together, items never leave their group; one undo step.
 * Packaging for plugins.qgis.org: the zip contains only runtime files under an explicit folder name, without executable bits or hidden/dev files; invalid `category` removed; `qgisMinimumVersion=4.0`, `qgisMaximumVersion=4.99`.
