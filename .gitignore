@@ -7,7 +7,7 @@ __pycache__/
 .vscode/
 *.qgz
 *.qgs~
-# ...except the manual test project (layers A–E, docs/TEST_SCENARIO.md)
+# ...except the manual test project (docs/TEST_SCENARIO.md, make test-data)
 !tests/data/*.qgz
 
 # Locally-extracted libegl1 for headless PyQt6 tests

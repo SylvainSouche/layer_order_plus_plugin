@@ -6,8 +6,9 @@ messages hold the full reasoning behind each fix.
 
 ## 1.3 — Move up / move down; review completed: strict MVC, Qt model/view tree, sync with QGIS's Layer Order panel, packaging for plugins.qgis.org
 
-*1.3.0 – 1.3.1*
+*1.3.0 – 1.3.2*
 
+* **1.3.2** — Opening a project no longer inherits the previous project's groups: the old project's layer removals were mirrored and the leftover tree saved into the project being opened (now ignored from `QgsProject.aboutToBeCleared`). Manual test plan rewritten with test data that shows the drawing order on the map (`make test-data`), expected results for Plus, QGIS's Layer Order panel and the map, and a headless replay that verifies them.
 * **1.3.1** — The panel no longer closes itself when a project is closed or when it is tabbed behind another panel (the plugin-menu toggle reacted to "hidden" as if it meant "closed"; it is now the dock's own toggle action). The dock has an object name, so QGIS restores its place and visibility between sessions.
 
 **1.3.0**
