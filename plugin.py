@@ -68,11 +68,12 @@ class LayerOrderPlusPlugin(QObject):
         self.view.verbose_toggled.connect(self._set_verbose)
 
         self.iface.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.view)
-        self._toggle_action = QAction(MENU, mw)
-        self._toggle_action.setCheckable(True)
-        self._toggle_action.setChecked(True)
-        self._toggle_action.toggled.connect(self.view.setVisible)
-        self.view.visibilityChanged.connect(self._toggle_action.setChecked)
+        # Qt's own show/hide action for the dock. Don't wire visibilityChanged
+        # to a home-made toggle: it also fires when the dock is merely hidden
+        # behind another tab or while QGIS rearranges panels (closing a
+        # project), and the toggle then really closed the dock.
+        self._toggle_action = self.view.toggleViewAction()
+        self._toggle_action.setText(MENU)
         self.iface.addPluginToMenu(MENU, self._toggle_action)
 
         self._setup_undo_integration()
@@ -85,8 +86,7 @@ class LayerOrderPlusPlugin(QObject):
         if self.controller is not None:
             self.controller.teardown()
         if self._toggle_action is not None:
-            self.iface.removePluginMenu(MENU, self._toggle_action)
-            self._toggle_action.deleteLater()
+            self.iface.removePluginMenu(MENU, self._toggle_action)   # owned by the dock
             self._toggle_action = None
         if self.view is not None:
             self.iface.removeDockWidget(self.view)

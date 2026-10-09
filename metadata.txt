@@ -4,7 +4,7 @@ qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 description=Layer Order panel with grouping (QGIS 4 / PyQt6 fork)
 about=A Layer Order panel with order groups: organise the map drawing order in nested folders that exist only for the drawing order (not Layers-panel groups). Drag and drop, undo/redo, two-way sync with the Layers panel visibility and with QGIS's own Layer Order panel. Fork of Layer Order Plus 1.0.0 (Samuel Kultz) for QGIS 4.
-version=1.3.0
+version=1.3.1
 author=Samuel Kultz (original); Sylvain Souche (QGIS 4 fork)
 email=samkultz@me.com
 tags=layers,layer tree,order,groups,workflow,productivity
@@ -17,7 +17,7 @@ experimental=False
 deprecated=False
 server=False
 changelog=
-    1.3.0: Move up / move down; review completed: strict MVC, Qt model/view tree, sync with QGIS's Layer Order panel, packaging for plugins.qgis.org
+    1.3.x: Move up / move down; review completed: strict MVC, Qt model/view tree, sync with QGIS's Layer Order panel, packaging for plugins.qgis.org
     1.2.x: Rewritten as model / view / controller; two-way sync with the Layers panel and QGIS's own Layer Order panel; undo that never fights QGIS
     1.1.0: Quality overhaul: visibility checkboxes, rename sync, persistence schema, empty-group cleanup, module split, unit tests
     1.0.x: QGIS 4 / PyQt6 port of the original plugin (1.0.0, Samuel Kultz); undo restores the map order; icons; group tools
