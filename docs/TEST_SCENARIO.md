@@ -5,7 +5,8 @@ Order panel, and real projects. Everything else is covered by `make test`
 and `make qgis-test` (see [`ARCHITECTURE.md`](ARCHITECTURE.md#tests)) —
 run those first.
 
-**Setup:** QGIS 4.x, a project with five point layers **A B C D E**, both
+**Setup:** QGIS 4.x, the test project `tests/data/test.qgz` (five point
+layers **A B C D E**, shapefiles alongside), both
 **Layer Order Plus** and QGIS's **Layer Order** panel visible, *Verbose
 logging* on (Log Messages → LayerOrderPlus). Note the build from
 `VERSION`. Mark each row Pass / Fail.
