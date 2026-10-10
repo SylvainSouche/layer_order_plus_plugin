@@ -4,7 +4,7 @@ import random
 
 from harness import Rig, check, finish
 
-from layer_order_plus_qgis4.model import GroupNode
+from advanced_layer_order.model import GroupNode
 
 r = Rig()
 r.fresh_abcde()
@@ -44,5 +44,5 @@ for seed in (1, 2, 3):
             continue
         r.native_drag("E", new, between_steps_ms=30)
         check(groups_of("ABCD") == base, f"seed {seed}: {new} regrouped {r.shape()}")
-        check(r.qgis_order() == r.plus_order(), f"seed {seed}: orders differ")
+        check(r.qgis_order() == r.alo_order(), f"seed {seed}: orders differ")
 finish()

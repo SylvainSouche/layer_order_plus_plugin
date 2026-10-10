@@ -1,4 +1,6 @@
-# Layer Order Plus — Architecture
+# Advanced Layer Order — Architecture
+
+*ALO* below stands for Advanced Layer Order.
 
 One rule: **each piece does one thing, and data flows one way.**
 The View shows the Model and reports what the user wants; it never acts on it.
@@ -72,10 +74,10 @@ step is recorded.
 
 ## Sync with QGIS
 
-* **Plus → QGIS**: `order_changed` → `setCustomLayerOrder` (50 ms debounce).
+* **ALO → QGIS**: `order_changed` → `setCustomLayerOrder` (50 ms debounce).
   While writing, `_applying` is set; QGIS echoes it synchronously and the
   Controller ignores its own echoes.
-* **QGIS → Plus**: layer added (placed next to its Layers-panel neighbour,
+* **QGIS → ALO**: layer added (placed next to its Layers-panel neighbour,
   one loop turn later because QGIS creates the tree node after
   `layersAdded`), removed, renamed, visibility, `hasCustomLayerOrder`.
 * **Stock Layer Order panel display**: that panel re-reads the order only on
@@ -146,18 +148,18 @@ selected blocks move together and nothing ever leaves its group.
   control, a reopened project staying unmodified, plugin load/unload
   + keyboard undo, the manual-test data really showing the order on the
   map, and a headless replay of `docs/TEST_SCENARIO.md` sections 1–7
-  asserting each step's Plus / Native / Map expectations.
+  asserting each step's ALO / Native / Map expectations.
 * `make test-data` — regenerates the manual-test project
   (`tests/data/make_test_project.py`).
 * `make lint` — ruff.
 
 ## Packaging
 
-`make zip` builds `dist/layer_order_plus_qgis4-<VERSION>.zip` from an
+`make zip` builds `dist/advanced_layer_order-<VERSION>.zip` from an
 explicit whitelist (the `*.py` modules, `metadata.txt`, `LICENSE`,
 `icon.png`, `icons/*.svg`, `README.md`, `VERSION.md`,
 `docs/DOCUMENTATION.md`) staged under the fixed folder
-`layer_order_plus_plugin` — the plugin's identity in QGIS — with plain
+`advanced_layer_order` — the plugin's identity in QGIS — with plain
 644/755 permissions. No dev files, hidden files or scripts, so the
 plugins.qgis.org upload scan (Bandit, detect-secrets, suspicious /
 executable / hidden files) has nothing to flag.

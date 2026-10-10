@@ -13,10 +13,10 @@ C="$QGIS_APP/Contents"
 PY="$(ls "$C"/MacOS/python3.* | head -1)"
 PYVER="$(basename "$PY")"
 
-# The plugin is imported as `layer_order_plus_qgis4` (its zip/folder name)
+# The plugin is imported as `advanced_layer_order` (its zip/folder name)
 PKG_ROOT="$(mktemp -d)"
 trap 'rm -rf "$PKG_ROOT"' EXIT
-ln -s "$PLUGIN_DIR" "$PKG_ROOT/layer_order_plus_qgis4"
+ln -s "$PLUGIN_DIR" "$PKG_ROOT/advanced_layer_order"
 
 export PYTHONHOME="$C/Resources"
 export PYTHONPATH="$C/Resources/$PYVER:$C/Resources/$PYVER/site-packages:$C/Resources/$PYVER/lib-dynload:$PKG_ROOT:$PLUGIN_DIR/tests/qgis"

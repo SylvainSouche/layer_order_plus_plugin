@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from layer_order_plus_qgis4.model import (
+from advanced_layer_order.model import (
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_CREATED,
     EVENT_GROUP_DELETED,

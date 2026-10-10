@@ -1,8 +1,8 @@
-"""Logging for Layer Order Plus — the standard `logging` module.
+"""Logging for Advanced Layer Order — the standard `logging` module.
 
-Every module logs to a child of the ``LayerOrderPlus`` logger
-(``logging.getLogger("LayerOrderPlus.<module>")``). Records go to the
-LayerOrderPlus tab of QGIS's Log Messages panel when QGIS is available,
+Every module logs to a child of the ``AdvancedLayerOrder`` logger
+(``logging.getLogger("AdvancedLayerOrder.<module>")``). Records go to the
+AdvancedLayerOrder tab of QGIS's Log Messages panel when QGIS is available,
 and to stderr otherwise (unit tests, scripts).
 
 INFO and above are always shown; DEBUG ("verbose", toggled by the dock's
@@ -10,12 +10,12 @@ checkbox) traces drops, Model mutations and QGIS sync.
 """
 import logging
 
-LOG_TAG = "LayerOrderPlus"
+LOG_TAG = "AdvancedLayerOrder"
 log = logging.getLogger(LOG_TAG)
 
 
 class _QgisMessageLogHandler(logging.Handler):
-    """Forward records to QgsMessageLog under the LayerOrderPlus tag."""
+    """Forward records to QgsMessageLog under the AdvancedLayerOrder tag."""
 
     def emit(self, record: logging.LogRecord) -> None:
         from qgis.core import Qgis, QgsMessageLog

@@ -1,4 +1,4 @@
-# Layer Order Plus — User guide
+# Advanced Layer Order — User guide
 
 **QGIS 4.x** · version in [`VERSION`](../VERSION) · developer documentation:
 [`ARCHITECTURE.md`](ARCHITECTURE.md)
@@ -14,7 +14,7 @@ QGIS has two related panels:
 | **Layers** | The layer tree: groups, visibility, properties, legend |
 | **Layer Order** | An optional *custom drawing order*, independent of the Layers panel |
 
-**Layer Order Plus** is a Layer Order panel with **order groups**: folders
+**Advanced Layer Order** (ALO below) is a Layer Order panel with **order groups**: folders
 that exist only to organise the drawing order. Top of the list is drawn on
 top of the map. The tree, flattened top to bottom, becomes QGIS's custom
 layer order.
@@ -26,10 +26,10 @@ layer order.
 
 ## 2. Install
 
-1. `make zip` → `dist/layer_order_plus_qgis4-<VERSION>.zip` (or use a release zip)
+1. `make zip` → `dist/advanced_layer_order-<VERSION>.zip` (or use a release zip)
 2. QGIS: **Plugins → Manage and Install Plugins → Install from ZIP**
-3. The **Layer Order Plus** dock appears on the left; toggle it from
-   **Plugins → Layer Order Plus**.
+3. The **Advanced Layer Order** dock appears on the left; toggle it from
+   **Plugins → Advanced Layer Order**.
 
 ---
 
@@ -40,7 +40,7 @@ layer order.
 The checkbox at the bottom is the same switch as the one in QGIS's own
 Layer Order panel; they always agree.
 
-* **On** — the Plus tree drives the map's drawing order; the tree and
+* **On** — the ALO tree drives the map's drawing order; the tree and
   tools are active.
 * **Off** — QGIS draws in Layers-panel order; the tree is greyed out.
 
@@ -76,7 +76,7 @@ all its Layers-panel groups checked), and stay in sync with the Layers
 panel both ways.
 
 * Checking a layer also checks its Layers-panel groups, so it shows.
-* A group checkbox in Plus checks/unchecks every layer in it; it is
+* A group checkbox in ALO checks/unchecks every layer in it; it is
   partially checked when only some are visible.
 
 ### New and removed layers
@@ -90,7 +90,7 @@ groups left empty are removed too (the setting is saved with the project).
 ## 4. Working with QGIS's own Layer Order panel
 
 Both panels show the same order. Moving a layer in QGIS's panel updates
-the Plus groups:
+the ALO groups:
 
 * dropped **between two layers of a group** → it joins that group;
 * dropped **on a group's edge** (just before its first or after its last
@@ -99,7 +99,7 @@ the Plus groups:
 * groups are never created or deleted from QGIS's panel, and no other
   layer changes group.
 
-Group structure itself (creating, nesting) is only edited in Plus.
+Group structure itself (creating, nesting) is only edited in ALO.
 
 ---
 
@@ -120,11 +120,15 @@ Group structure itself (creating, nesting) is only edited in Plus.
 
 | Project entry | Content |
 |---|---|
-| `BetterLayerOrder / tree_json` | The groups and the order: `{"version": 1, "children": [...]}` with group nodes (`id`, `name`, `expanded`, `children`) and layer nodes (`id`, `name`) |
-| `BetterLayerOrder / removeEmptyGroups` | The remove-empty-groups setting |
+| `AdvancedLayerOrder / tree_json` | The groups and the order: `{"version": 1, "children": [...]}` with group nodes (`id`, `name`, `expanded`, `children`) and layer nodes (`id`, `name`) |
+| `AdvancedLayerOrder / removeEmptyGroups` | The remove-empty-groups setting |
+
+Projects saved with *Layer Order Plus* or early builds of this plugin keep
+their groups: their `BetterLayerOrder` entries are read when no
+`AdvancedLayerOrder` entry exists.
 
 The custom order itself and "Control rendering order" are QGIS's own
-project settings. Visibility is never stored by Plus.
+project settings. Visibility is never stored by ALO.
 
 When a project opens, layers that no longer exist are dropped from the
 tree and new ones are added next to their Layers-panel neighbour.
@@ -134,7 +138,7 @@ tree and new ones are added next to their Layers-panel neighbour.
 ## 7. Troubleshooting
 
 Check **Verbose logging** at the bottom of the panel, then open
-**View → Panels → Log Messages**, tab **LayerOrderPlus**: drops, model
+**View → Panels → Log Messages**, tab **AdvancedLayerOrder**: drops, model
 changes, reconciliations with QGIS's panel and applied orders are traced.
 Errors are always logged there.
 
@@ -142,6 +146,8 @@ Errors are always logged there.
 
 ## 8. Credits and license
 
-* **Original (v1.0.0):** Samuel Kultz — https://github.com/samkultz/layer_order_plus_plugin
-* **QGIS 4 fork:** Sylvain Souche — https://github.com/SylvainSouche/layer_order_plus_plugin
+* **Original plugin:** *Layer Order Plus* 1.0.0 (QGIS 3), Samuel Kultz —
+  https://github.com/samkultz/layer_order_plus_plugin
+* **Advanced Layer Order** (QGIS 4 continuation): Sylvain Souche —
+  https://github.com/SylvainSouche/qgis_advanced_layer_order
 * **License:** MIT — see [`LICENSE`](../LICENSE)

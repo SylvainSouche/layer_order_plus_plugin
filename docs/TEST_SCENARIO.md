@@ -1,4 +1,6 @@
-# Layer Order Plus — Manual acceptance test
+# Advanced Layer Order — Manual acceptance test
+
+*ALO* below stands for Advanced Layer Order, the plugin under test.
 
 This plan covers what only a person can check:
 
@@ -11,7 +13,7 @@ Run `make test` and `make qgis-test` first (see
 [`ARCHITECTURE.md`](ARCHITECTURE.md#tests)). `tests/qgis/check_manual_plan.py`
 replays sections 1–7 of this plan headless on the same data: it performs
 each step through the same entry points the UI uses and asserts the
-Plus / Native / Map columns below. The expected results are therefore
+ALO / Native / Map columns below. The expected results are therefore
 known to be right; the manual run confirms that a real user, with a real
 mouse and screen, gets them.
 
@@ -54,11 +56,11 @@ and D, and A covering B:
 * Layers panel order: A B C D E (top to bottom).
 * "Control rendering order" is **off**, and a stale custom order
   E D C B A is stored.
-* No Layer Order Plus tree is saved.
+* No Advanced Layer Order tree is saved.
 
 ### Notation
 
-* **Plus**: the Layer Order Plus tree, groups as `Name[children]`, e.g.
+* **ALO**: the Advanced Layer Order tree, groups as `Name[children]`, e.g.
   `ABCD[AB[A, B], CD[C, D]], E`.
 * **Native**: QGIS's **Layer Order** panel (View → Panels → Layer Order),
   top to bottom, e.g. `A B C D E`.
@@ -67,10 +69,10 @@ and D, and A covering B:
 
 ### Setup
 
-1. Have QGIS 4 with the **Layers**, **Layer Order** and **Layer Order Plus**
+1. Have QGIS 4 with the **Layers**, **Layer Order** and **Advanced Layer Order**
    panels visible, and **View → Panels → Log Messages**, tab
-   **LayerOrderPlus**, open. Any red message there is a failure.
-2. Tick *Verbose logging* in Plus only to investigate a failure.
+   **AdvancedLayerOrder**, open. Any red message there is a failure.
+2. Tick *Verbose logging* in ALO only to investigate a failure.
 
 ---
 
@@ -78,7 +80,7 @@ and D, and A covering B:
 
 | # | Action | Expected |
 |---|---|---|
-| 0.1 | Plugins → Manage and Install Plugins → **Install from ZIP**: `layer_order_plus_qgis4-<VERSION>.zip` | Installs without error; the "Layer Order Plus" panel appears on the left; the Plugins → Layer Order Plus menu has the panel toggle, "Undo layer order" and "Redo layer order"; the Edit menu ends with "Undo / Redo layer order"; Plugin Manager shows the version from `VERSION` |
+| 0.1 | Plugins → Manage and Install Plugins → **Install from ZIP**: `advanced_layer_order-<VERSION>.zip` | Installs without error; the "Advanced Layer Order" panel appears on the left; the Plugins → Advanced Layer Order menu has the panel toggle, "Undo layer order" and "Redo layer order"; the Edit menu ends with "Undo / Redo layer order"; Plugin Manager shows the version from `VERSION` |
 | 0.2 | Install the same zip again (upgrade) | Still one plugin entry and one panel |
 | 0.3 | *(If you also run QGIS 3)* try the zip in QGIS 3 | Refused or listed as incompatible; nothing loads, no Python error |
 
@@ -86,11 +88,11 @@ and D, and A covering B:
 
 Open `tests/data/test.qgz`. The rows are cumulative.
 
-| # | Action | Plus | Native | Map |
+| # | Action | ALO | Native | Map |
 |---|---|---|---|---|
 | 1.1 | (project just opened) | `A, B, C, D, E`, greyed out, control **off** | checkbox off, greyed: `A B C D E` | centre **red** (A) |
-| 1.2 | Tick **Control rendering order** in **Plus** | tree enabled, control on | checkbox **on**: `A B C D E` (not `E D C B A`) | centre red |
-| 1.3 | Untick it in Plus | greyed, control off | checkbox off: `A B C D E` | centre red |
+| 1.2 | Tick **Control rendering order** in **ALO** | tree enabled, control on | checkbox **on**: `A B C D E` (not `E D C B A`) | centre red |
+| 1.3 | Untick it in ALO | greyed, control off | checkbox off: `A B C D E` | centre red |
 | 1.4 | Tick it in the **Native** panel | follows: control on, tree enabled | `A B C D E` | centre red |
 | 1.5 | In the **Layers** panel, drag E to the top | unchanged | unchanged | centre still **red**: the custom order rules |
 | 1.6 | Untick control (either panel) | control off | `E A B C D` (the Layers panel order) | centre **blue** (E) |
@@ -98,7 +100,7 @@ Open `tests/data/test.qgz`. The rows are cumulative.
 
 ## 2. Groups — the baseline
 
-| # | Action | Plus | Native | Map |
+| # | Action | ALO | Native | Map |
 |---|---|---|---|---|
 | 2.1 | Select A, B → **Create group** (toolbar) → "AB" | `AB[A, B], C, D, E`, AB expanded and selected | `A B C D E` | unchanged: groups never change the order |
 | 2.2 | Select C, D → right-click → **Create group** → "CD" | `AB[A, B], CD[C, D], E` | `A B C D E` | unchanged |
@@ -112,11 +114,11 @@ Open `tests/data/test.qgz`. The rows are cumulative.
 **"Reopen the baseline"** below means **File → Open**
 `~/lop-baseline.qgz`, discarding changes.
 
-## 3. Drag and drop in Plus (mouse)
+## 3. Drag and drop in ALO (mouse)
 
 Reopen the baseline before each row.
 
-| # | Action | Plus | Native | Map |
+| # | Action | ALO | Native | Map |
 |---|---|---|---|---|
 | 3.1 | Drag E **above** A (the line appears above A) | `ABCD[AB[E, A, B], CD[C, D]]` | `E A B C D` | centre **blue** |
 | 3.2 | Drag E **below** D (line below D) | `ABCD[AB[A, B], CD[C, D, E]]` | `A B C D E` | centre red; D–E overlap **green** |
@@ -132,7 +134,7 @@ Reopen the baseline before each row.
 
 Reopen the baseline. The rows are cumulative.
 
-| # | Action | Plus | Native | Map |
+| # | Action | ALO | Native | Map |
 |---|---|---|---|---|
 | 4.1 | Select B → toolbar **▲** | `ABCD[AB[B, A], CD[C, D]], E` | `B A C D E` | centre **orange** |
 | 4.2 | **▲** again | unchanged: B is first in AB | `B A C D E` | orange |
@@ -146,9 +148,9 @@ Reopen the baseline. The rows are cumulative.
 
 Reopen the baseline, then drag in the **Native** panel. The rows are
 cumulative. **In every row, no layer other than the dragged one may
-change group in Plus.**
+change group in ALO.**
 
-| # | Action (Native panel) | Plus | Native | Map |
+| # | Action (Native panel) | ALO | Native | Map |
 |---|---|---|---|---|
 | 5.1 | Drag E between A and B | `ABCD[AB[A, E, B], CD[C, D]]` | `A E B C D` | centre red; E–A overlap **red** |
 | 5.2 | Drag E to the very top | `ABCD[AB[E, A, B], CD[C, D]]`: E stays in AB *(group-edge rule under discussion)* | `E A B C D` | centre **blue** |
@@ -161,20 +163,20 @@ change group in Plus.**
 
 Reopen the baseline. The rows are cumulative.
 
-| # | Action | Plus | Layers and Native panels | Map |
+| # | Action | ALO | Layers and Native panels | Map |
 |---|---|---|---|---|
-| 6.1 | Untick C in **Plus** | C unticked; CD partially ticked | C unticked | yellow disc gone; centre red |
+| 6.1 | Untick C in **ALO** | C unticked; CD partially ticked | C unticked | yellow disc gone; centre red |
 | 6.2 | Tick C in the **Layers** panel | C ticked again | — | yellow back |
-| 6.3 | Untick group AB in Plus | A and B unticked | A and B unticked | red and orange gone; centre **yellow** |
-| 6.4 | Tick AB in Plus | A and B ticked | ticked | centre red |
+| 6.3 | Untick group AB in ALO | A and B unticked | A and B unticked | red and orange gone; centre **yellow** |
+| 6.4 | Tick AB in ALO | A and B ticked | ticked | centre red |
 | 6.5 | Layers panel: create a group "QG", move D into it, untick QG | D unticked (it isn't drawn) | D ticked, QG unticked | green gone |
-| 6.6 | Tick D in **Plus** | D ticked | QG ticked again | green back |
+| 6.6 | Tick D in **ALO** | D ticked | QG ticked again | green back |
 
 ## 7. Layers added, renamed, removed
 
 Reopen the baseline. The rows are cumulative unless they say otherwise.
 
-| # | Action | Plus | Native | Map |
+| # | Action | ALO | Native | Map |
 |---|---|---|---|---|
 | 7.1 | Select C in the **Layers** panel; add layer F (Browser → `tests/data/test_layers.gpkg` → F, or Layer → Add Layer) | `ABCD[AB[A, B], CD[F, C, D]], E` | `A B F C D E` | purple F at the lower right, **above C** (the F–C overlap is purple; picture below) |
 | 7.2 | Rename F to "F2" in the Layers panel | renamed | renamed | — |
@@ -192,28 +194,28 @@ Reopen the baseline; do 4.1 then 4.3.
 
 | # | Action | Expected |
 |---|---|---|
-| 8.1 | Focus on the Plus tree: **Ctrl+Z** | one step undone (state of 4.1, centre orange) |
+| 8.1 | Focus on the ALO tree: **Ctrl+Z** | one step undone (state of 4.1, centre orange) |
 | 8.2 | Click the map; **Ctrl+Z** | one more step (the baseline, centre red) |
 | 8.3 | **Ctrl+Y**, then **Ctrl+Shift+Z** | one step redone each (centre orange, then yellow) |
 | 8.4 | Edit → Undo layer order / Redo layer order | same as the keys; greyed out when there's nothing to undo or redo |
 | 8.5 | Toggle editing on layer A, move a vertex, Ctrl+Z | the vertex move is undone, **not** the layer order; then stop editing without saving |
-| 8.6 | Type in the Plus "Rename group" dialog, or in the Python console, then Ctrl+Z | only the text is undone |
+| 8.6 | Type in the ALO "Rename group" dialog, or in the Python console, then Ctrl+Z | only the text is undone |
 | 8.7 | Collapse ABCD, then Ctrl+Z | ABCD stays collapsed (expansion isn't undone) |
 
 ## 9. Saving, closing, switching projects, restarting
 
 | # | Action | Expected |
 |---|---|---|
-| 9.1 | Reopen the baseline; File → **Close** | the Plus panel **stays open**, empty; the Native panel is empty |
-| 9.2 | Open `~/lop-baseline.qgz` | Plus: the baseline tree, expansion as saved; Native `A B C D E`; centre red; the window title shows **no** "modified" mark; Edit → Undo layer order greyed out |
-| 9.3 | Then open `tests/data/test.qgz` (discard changes) | Plus: `A, B, C, D, E` with **no** group from the previous project |
-| 9.4 | Tab the Plus panel behind the Layers panel, switch tabs, close and reopen a project | Plus is still in its tab |
-| 9.5 | Plugins → Layer Order Plus → **Layer Order Plus** | hides or shows the panel; the menu tick follows |
+| 9.1 | Reopen the baseline; File → **Close** | the ALO panel **stays open**, empty; the Native panel is empty |
+| 9.2 | Open `~/lop-baseline.qgz` | ALO: the baseline tree, expansion as saved; Native `A B C D E`; centre red; the window title shows **no** "modified" mark; Edit → Undo layer order greyed out |
+| 9.3 | Then open `tests/data/test.qgz` (discard changes) | ALO: `A, B, C, D, E` with **no** group from the previous project |
+| 9.4 | Tab the ALO panel behind the Layers panel, switch tabs, close and reopen a project | ALO is still in its tab |
+| 9.5 | Plugins → Advanced Layer Order → **Advanced Layer Order** | hides or shows the panel; the menu tick follows |
 | 9.6 | Put the panel somewhere else; quit QGIS; restart | the panel comes back at the same place, with the same visibility |
 
 ## 10. macOS only
 
 | # | Action | Expected |
 |---|---|---|
-| 10.1 | ⌘↑ / ⌘↓ on a selected layer in Plus | moves it, as in section 4 |
+| 10.1 | ⌘↑ / ⌘↓ on a selected layer in ALO | moves it, as in section 4 |
 | 10.2 | ⌘Z / ⌘⇧Z | undo / redo layer order, as in section 8 |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI checks for Layer Order Plus (no QGIS runtime required)."""
+"""CI checks for Advanced Layer Order (no QGIS runtime required)."""
 from __future__ import annotations
 
 import ast

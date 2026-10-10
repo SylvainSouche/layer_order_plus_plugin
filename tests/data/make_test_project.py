@@ -24,7 +24,7 @@ Project state (chosen to exercise the known traps):
 * A stale custom order E D C B A is saved with "Control rendering order"
   OFF — the state in which QGIS's Layer Order panel used to show the wrong
   order after activation (fixed in 1.2.27).
-* No Layer Order Plus tree is saved: Plus starts from the QGIS order.
+* No Advanced Layer Order tree is saved: ALO starts from the QGIS order.
 """
 import math
 import os
@@ -148,7 +148,7 @@ def build():
         lyr.setLabeling(QgsVectorLayerSimpleLabeling(label))
         lyr.setLabelsEnabled(True)
         # Store the style in the GeoPackage too: F looks right when added
-        lyr.saveStyleToDatabaseV2(name, "Layer Order Plus test style", True, "")
+        lyr.saveStyleToDatabaseV2(name, "Advanced Layer Order test style", True, "")
         return lyr
 
     for name in EXTRA:
@@ -158,7 +158,7 @@ def build():
     proj = QgsProject.instance()
     proj.clear()
     proj.setCrs(crs)
-    proj.setTitle("Layer Order Plus — manual test")
+    proj.setTitle("Advanced Layer Order — manual test")
     layers = {name: styled(name) for name in LAYERS}
     root = proj.layerTreeRoot()
     for name in LAYERS:                        # A B C D E, top to bottom

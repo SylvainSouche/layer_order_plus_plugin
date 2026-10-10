@@ -1,4 +1,4 @@
-"""Reconcile the Plus tree with a flat layer order coming from QGIS.
+"""Reconcile the ALO tree with a flat layer order coming from QGIS.
 
 When the user reorders layers in the stock Layer Order panel, QGIS only
 gives us a new flat list. The group structure has to be inferred. This

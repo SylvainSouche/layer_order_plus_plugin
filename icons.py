@@ -1,4 +1,4 @@
-"""Icons for Layer Order Plus.
+"""Icons for Advanced Layer Order.
 
 Toolbar and group icons are SVGs shipped in ``icons/``; layer icons come
 from QGIS (``QgsIconUtils.iconForLayer``), with a bundled generic icon for

@@ -16,17 +16,17 @@ APP.initQgis()
 from qgis.PyQt.QtCore import QCoreApplication, QObject, pyqtSignal  # noqa: E402
 from qgis.PyQt.QtWidgets import QMainWindow  # noqa: E402
 
-from layer_order_plus_qgis4.controller import ENTRY_SCOPE, ENTRY_TREE, LayerOrderController  # noqa: E402
-from layer_order_plus_qgis4.model import GroupNode, LayerOrderModel  # noqa: E402
-from layer_order_plus_qgis4.view import LayerOrderView  # noqa: E402
-from layer_order_plus_qgis4.view_controller import ViewController  # noqa: E402
+from advanced_layer_order.controller import ENTRY_SCOPE, ENTRY_TREE, LayerOrderController  # noqa: E402
+from advanced_layer_order.model import GroupNode, LayerOrderModel  # noqa: E402
+from advanced_layer_order.view import LayerOrderView  # noqa: E402
+from advanced_layer_order.view_controller import ViewController  # noqa: E402
 
 
 def open_test_project() -> None:
     """A fresh project like the one the bugs were reported on.
 
     Layers A–E, Layers panel order E..A (QGIS puts new layers on top), a
-    saved custom order A..E with control OFF, and a saved Plus tree A..E.
+    saved custom order A..E with control OFF, and a saved ALO tree A..E.
     """
     proj = QgsProject.instance()
     proj.clear()
@@ -114,7 +114,7 @@ class Rig:
     def qgis_order(self) -> str:
         return "".join(self.name(lyr.id()) for lyr in self.root.customLayerOrder())
 
-    def plus_order(self) -> str:
+    def alo_order(self) -> str:
         return "".join(self.name(i) for i in self.model.get_flattened_layer_ids())
 
     def group_ids(self) -> dict:

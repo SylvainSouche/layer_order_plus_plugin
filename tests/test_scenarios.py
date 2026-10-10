@@ -6,7 +6,7 @@ plus a headless ViewController where needed.
 """
 
 
-from layer_order_plus_qgis4.model import (
+from advanced_layer_order.model import (
     GroupNode,
     LayerNode,
     LayerOrderModel,
@@ -141,7 +141,7 @@ def test_move_all_items_out_of_group_keeps_when_setting_off():
 # ====================================================================
 
 def test_reconcile_within_group_swap():
-    """(C, Group(A, B)) → native reorders to [C, B, A] → Plus should become (C, Group(B, A)).
+    """(C, Group(A, B)) → native reorders to [C, B, A] → ALO should become (C, Group(B, A)).
 
     Tests _reorder_all_levels_to_match_qgis logic at the Model level.
     """

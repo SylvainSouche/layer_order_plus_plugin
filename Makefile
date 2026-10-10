@@ -1,10 +1,10 @@
-# Layer Order Plus (QGIS 4 fork) — build
+# Advanced Layer Order (QGIS 4 fork) — build
 # Single source of truth: ./VERSION
 # Detailed history: VERSION.md; macro versions: metadata.txt changelog
 
 PLUGIN_DIR   := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PLUGIN_DIR   := $(PLUGIN_DIR:/=)
-PLUGIN_NAME  := layer_order_plus_qgis4
+PLUGIN_NAME  := advanced_layer_order
 VERSION_FILE := $(PLUGIN_DIR)/VERSION
 VERSION      := $(shell tr -d '[:space:]' < "$(VERSION_FILE)")
 # Zip lands in ./dist
@@ -56,8 +56,7 @@ test-data:
 
 # The plugin folder name inside the zip is the plugin's identity in QGIS
 # (and on plugins.qgis.org): never derive it from the checkout folder.
-# Pending the first publication — see docs/RELEASING.md
-PLUGIN_FOLDER ?= layer_order_plus_plugin
+PLUGIN_FOLDER := advanced_layer_order
 # Runtime files only (plus the user guide and history); no dev files,
 # no hidden files, no executable bits.
 RUNTIME_FILES := $(sort $(wildcard $(PLUGIN_DIR)/*.py)) \

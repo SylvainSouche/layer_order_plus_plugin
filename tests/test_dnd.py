@@ -10,8 +10,8 @@ import pytest
 from PyQt6.QtCore import QMimeData, QModelIndex, QPoint, Qt
 from PyQt6.QtTest import QTest
 
-from layer_order_plus_qgis4.model import GroupNode, LayerNode, LayerOrderModel
-from layer_order_plus_qgis4.tree_model import (
+from advanced_layer_order.model import GroupNode, LayerNode, LayerOrderModel
+from advanced_layer_order.tree_model import (
     DROP_ABOVE,
     DROP_BELOW,
     DROP_END,
@@ -62,8 +62,8 @@ def _expanded(view, group_id):
 
 @pytest.fixture
 def mvc(qapp):
-    from layer_order_plus_qgis4.view import LayerOrderView
-    from layer_order_plus_qgis4.view_controller import ViewController
+    from advanced_layer_order.view import LayerOrderView
+    from advanced_layer_order.view_controller import ViewController
 
     view = LayerOrderView()
     model = LayerOrderModel()

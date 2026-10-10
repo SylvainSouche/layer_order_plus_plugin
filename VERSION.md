@@ -1,6 +1,6 @@
 # Version history
 
-Detailed history of Layer Order Plus. `metadata.txt` only lists the macro
+Detailed history of Advanced Layer Order (previously the QGIS 4 fork of Layer Order Plus). `metadata.txt` only lists the macro
 versions; the current version number is in [`VERSION`](VERSION). Commit
 messages hold the full reasoning behind each fix.
 
@@ -8,7 +8,7 @@ messages hold the full reasoning behind each fix.
 
 *1.3.0 – 1.3.2*
 
-* **1.3.2** — Opening a project no longer inherits the previous project's groups: the old project's layer removals were mirrored and the leftover tree saved into the project being opened (now ignored from `QgsProject.aboutToBeCleared`). Manual test plan rewritten with test data that shows the drawing order on the map (`make test-data`), expected results for Plus, QGIS's Layer Order panel and the map, and a headless replay that verifies them. Release metadata: maintained by Sylvain Souche with Samuel Kultz's agreement (author, email, LICENSE, README), published as experimental.
+* **1.3.2** — Opening a project no longer inherits the previous project's groups: the old project's layer removals were mirrored and the leftover tree saved into the project being opened (now ignored from `QgsProject.aboutToBeCleared`). Manual test plan rewritten with test data that shows the drawing order on the map (`make test-data`), expected results for Plus, QGIS's Layer Order panel and the map, and a headless replay that verifies them. Release metadata: maintained by Sylvain Souche with Samuel Kultz's agreement (author, email, LICENSE, README), published as experimental. Published as a new plugin, **Advanced Layer Order** (folder `advanced_layer_order`, repository `qgis_advanced_layer_order`); projects saved under the old `BetterLayerOrder` key keep their groups.
 * **1.3.1** — The panel no longer closes itself when a project is closed or when it is tabbed behind another panel (the plugin-menu toggle reacted to "hidden" as if it meant "closed"; it is now the dock's own toggle action). The dock has an object name, so QGIS restores its place and visibility between sessions.
 
 **1.3.0**

@@ -1,8 +1,8 @@
-"""Reconcile the Plus tree with a flat order coming from the stock Layer Order panel."""
+"""Reconcile the ALO tree with a flat order coming from the stock Layer Order panel."""
 
 
-from layer_order_plus_qgis4.model import GroupNode, LayerNode
-from layer_order_plus_qgis4.reconcile import reconcile_tree
+from advanced_layer_order.model import GroupNode, LayerNode
+from advanced_layer_order.reconcile import reconcile_tree
 
 
 def _build(spec):

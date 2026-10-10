@@ -43,11 +43,11 @@ jobs:
           make show-version
           make zip
           VERSION=$(tr -d '[:space:]' < VERSION)
-          test -f "dist/layer_order_plus_qgis4-${VERSION}.zip"
+          test -f "dist/advanced_layer_order-${VERSION}.zip"
 
       - name: Upload plugin zip
         uses: actions/upload-artifact@v4
         with:
-          name: layer_order_plus_qgis4-zip
-          path: dist/layer_order_plus_qgis4-*.zip
+          name: advanced_layer_order-zip
+          path: dist/advanced_layer_order-*.zip
           if-no-files-found: error
