@@ -307,12 +307,6 @@ def test_control_click_only_requests(mvc):
     assert not box.isChecked()
 
 
-def test_remove_empty_click_updates_model_setting(mvc):
-    mvc.view.chk_remove_empty.click()
-    assert mvc.model.get_remove_empty_groups() is False
-    assert not mvc.view.chk_remove_empty.isChecked()
-
-
 # ---------- the tree never acts on its own ----------
 
 def _show(mvc):

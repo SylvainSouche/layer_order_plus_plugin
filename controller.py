@@ -13,7 +13,6 @@ QGIS → Model
 Model → QGIS
     * order_changed                       → setCustomLayerOrder (debounced)
     * document changes                    → tree_json project entry + dirty
-    * remove_empty_groups setting         → project entry
 
 Requests (wired by plugin.py from the ViewController)
     * set_layers_visible(ids, visible)    → layer tree checkboxes
@@ -34,8 +33,6 @@ from .model import (
     EVENT_LAYER_RENAMED,
     EVENT_MODEL_LOADED,
     EVENT_ORDER_CHANGED,
-    EVENT_SETTING_CHANGED,
-    SETTING_REMOVE_EMPTY_GROUPS,
     LayerOrderModel,
 )
 from .reconcile import reconcile_tree
@@ -45,7 +42,6 @@ log = logging.getLogger("AdvancedLayerOrder.controller")
 ENTRY_SCOPE = "AdvancedLayerOrder"
 LEGACY_SCOPE = "BetterLayerOrder"     # Layer Order Plus and early fork builds: read, never written
 ENTRY_TREE = "tree_json"
-ENTRY_REMOVE_EMPTY = "removeEmptyGroups"
 
 APPLY_DEBOUNCE_MS = 50
 
@@ -181,9 +177,7 @@ class LayerOrderController(QObject):
         try:
             scope = ENTRY_SCOPE if proj.readEntry(ENTRY_SCOPE, ENTRY_TREE, "")[0] else LEGACY_SCOPE
             raw = proj.readEntry(scope, ENTRY_TREE, "")[0] or ""
-            remove_empty, ok = proj.readBoolEntry(scope, ENTRY_REMOVE_EMPTY, True)
             with model.block_notifications():
-                model.set_remove_empty_groups(remove_empty if ok else True)
                 model.set_control_enabled(root.hasCustomLayerOrder())
                 model.load_from_json(raw)
                 self._sync_layer_set()
@@ -407,10 +401,6 @@ class LayerOrderController(QObject):
             self._apply_timer.start()
         if event_type in _DOCUMENT_EVENTS:
             self._save_document()
-        elif event_type == EVENT_SETTING_CHANGED and payload["key"] == SETTING_REMOVE_EMPTY_GROUPS:
-            proj = QgsProject.instance()
-            proj.writeEntry(ENTRY_SCOPE, ENTRY_REMOVE_EMPTY, bool(payload["value"]))
-            proj.setDirty(True)
 
     def _qgis_has_model_order(self) -> bool:
         """True if QGIS already renders the Model's order (e.g. right after a

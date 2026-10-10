@@ -72,8 +72,6 @@ def test_index_never_stale_under_random_edits():
                 m.move_items_by_one(rng.sample(nodes, min(2, len(nodes))), rng.random() < .5)
             elif op == 7 and nodes:
                 m.move_items_to_boundary(rng.sample(nodes, min(2, len(nodes))), rng.random() < .5)
-            elif op == 8:
-                m.prune_empty_groups()
             else:
                 m.restore_structure(rng.choice(snapshots))
             snapshots.append(m.serialize())
@@ -112,7 +110,7 @@ def test_add_layers_beside_events():
         ("layer_added", "x", 1), ("layer_added", "y", 2), ("order_changed", None, None)]
 
 
-def test_remove_layers_prunes_only_groups_it_emptied():
+def test_remove_layers_keeps_groups():
     m = LayerOrderModel()
     outer = m.create_group("outer")
     inner = m.create_group("inner", outer)
@@ -123,8 +121,8 @@ def test_remove_layers_prunes_only_groups_it_emptied():
     events = []
     m.add_listener(lambda t, p: events.append(t))
     m.remove_layers(["a", "b", "nope"])
-    assert [n.name for n, _ in m.walk()] == ["kept empty", "c"]
-    assert events.count("layer_removed") == 2 and events.count("group_deleted") == 2
+    assert [n.name for n, _ in m.walk()] == ["outer", "inner", "kept empty", "c"]
+    assert events == ["layer_removed", "layer_removed", "order_changed"]
     assert events[-1] == "order_changed"
 
 

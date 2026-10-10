@@ -6,7 +6,7 @@ Contract
   carries everything needed to act on it (ids, target, flag). The View
   never decides what an action means and never changes what it displays
   in response to its own input: drops, checkbox clicks, branch arrows and
-  settings boxes are only reported.
+  the control box are only reported.
 * **In**: the ViewController tells the View what to display through the
   ``render*`` methods. That is the only way displayed state changes.
 
@@ -83,11 +83,10 @@ class LayerOrderView(QDockWidget):
     delete_groups_requested = pyqtSignal(list)           # group ids
     move_to_boundary_requested = pyqtSignal(list, bool)  # item ids, to_top
     move_by_one_requested = pyqtSignal(list, bool)       # item ids, up
-    expand_requested = pyqtSignal(list, bool)            # group ids, expanded
+    expand_requested = pyqtSignal(str, bool)             # group id, expanded
     check_requested = pyqtSignal(str, bool)              # item id (layer or group), checked
     drop_requested = pyqtSignal(list, str, str)          # moving ids, target id, DROP_* position
     control_toggled = pyqtSignal(bool)
-    remove_empty_toggled = pyqtSignal(bool)
     verbose_toggled = pyqtSignal(bool)
     undo_requested = pyqtSignal(bool)                    # True = undo, False = redo (toolbar buttons)
 
@@ -143,14 +142,13 @@ class LayerOrderView(QDockWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lay.addWidget(self.tree)
 
-        # Labels QGIS has are translated by QGIS (i18n.py); the others stay in English
+        # Translated by QGIS (i18n.py)
         self.chk_control = _ReportingCheckBox(tr(CONTROL_RENDERING_ORDER))
-        self.chk_remove_empty = _ReportingCheckBox("Remove empty groups on layer delete")
         # Debug aid only: shown when QGIS runs with QGIS_DEBUG set
         # (Settings → Options → System → Environment)
         self.chk_verbose = _ReportingCheckBox("Verbose logging (AdvancedLayerOrder log tab)")
         self.chk_verbose.setVisible(bool(os.environ.get("QGIS_DEBUG")))
-        for c in (self.chk_control, self.chk_remove_empty, self.chk_verbose):
+        for c in (self.chk_control, self.chk_verbose):
             lay.addWidget(c)
 
     def _connect_signals(self):
@@ -164,11 +162,10 @@ class LayerOrderView(QDockWidget):
         self.btn_move_down.clicked.connect(self._request_move_down)
         self.tree.move_intent.connect(self._request_move_by_one)
         self.chk_control.toggle_requested.connect(self.control_toggled)
-        self.chk_remove_empty.toggle_requested.connect(self.remove_empty_toggled)
         self.chk_verbose.toggle_requested.connect(self.verbose_toggled)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.selectionModel().selectionChanged.connect(self._update_group_buttons)
-        self.tree.expand_intent.connect(self._request_expand)
+        self.tree.expand_intent.connect(self.expand_requested)
         self.btn_undo.clicked.connect(self._request_undo)
         self.btn_redo.clicked.connect(self._request_redo)
         self.item_model.drop_intent.connect(self.drop_requested)
@@ -185,9 +182,6 @@ class LayerOrderView(QDockWidget):
 
     def _request_move_down(self):
         self._request_move_by_one(False)
-
-    def _request_expand(self, group_id: str, expanded: bool):
-        self.expand_requested.emit([group_id], expanded)
 
     def _request_undo(self):
         self.undo_requested.emit(True)
@@ -331,7 +325,7 @@ class LayerOrderView(QDockWidget):
 
     def render_control_enabled(self, enabled: bool):
         self.chk_control.setChecked(bool(enabled))
-        for w in (self.tree, self.btn_add_group, self.chk_remove_empty):
+        for w in (self.tree, self.btn_add_group):
             w.setEnabled(enabled)
         self._update_group_buttons()
 
@@ -342,9 +336,6 @@ class LayerOrderView(QDockWidget):
         self.btn_undo.setToolTip(f"{undo}: {undo_text}" if can_undo and undo_text else undo)
         self.btn_redo.setToolTip(f"{redo}: {redo_text}" if can_redo and redo_text else redo)
         self._update_group_buttons()
-
-    def render_remove_empty(self, checked: bool):
-        self.chk_remove_empty.setChecked(bool(checked))
 
     def render_verbose(self, checked: bool):
         self.chk_verbose.setChecked(bool(checked))

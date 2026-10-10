@@ -6,8 +6,7 @@ Model, and it does exactly two things:
 1. **Acts on intents.** Each intent from the View becomes either
    * one undoable Model transaction (create / rename / delete group, move,
      drop) — see ``_user_edit``; or
-   * a plain Model update for UI-only document state (expanded) and
-     document settings (remove empty groups); or
+   * a plain Model update for UI-only document state (expanded); or
    * a *request* for state that QGIS owns (layer visibility, control of the
      rendering order). Those are re-emitted as ``visibility_requested`` /
      ``control_requested`` for the Controller; the result comes back
@@ -41,15 +40,13 @@ from .i18n import (
     tr,
 )
 from .model import (
+    EVENT_CONTROL_CHANGED,
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_RENAMED,
     EVENT_LAYER_RENAMED,
     EVENT_MODEL_LOADED,
     EVENT_ORDER_CHANGED,
-    EVENT_SETTING_CHANGED,
     EVENT_VISIBILITY_CHANGED,
-    SETTING_CONTROL_ENABLED,
-    SETTING_REMOVE_EMPTY_GROUPS,
     TYPE_GROUP,
     TYPE_LAYER,
     GroupNode,
@@ -93,7 +90,6 @@ class ViewController(QObject):
         for sig in (stack.canUndoChanged, stack.canRedoChanged, stack.undoTextChanged, stack.redoTextChanged):
             sig.connect(self._render_undo_state)
         v.control_toggled.connect(self.control_requested)
-        v.remove_empty_toggled.connect(self._model.set_remove_empty_groups)
         self._render_all()
 
     def record_step(self, before: str, after: str, text: str) -> None:
@@ -127,8 +123,8 @@ class ViewController(QObject):
             v.render_visibility(payload["layer_id"], payload["visible"])
         elif event_type == EVENT_EXPANDED_CHANGED:
             v.render_expanded(payload["group_id"], payload["expanded"])
-        elif event_type == EVENT_SETTING_CHANGED:
-            self._render_setting(payload["key"], payload["value"])
+        elif event_type == EVENT_CONTROL_CHANGED:
+            v.render_control_enabled(payload["enabled"])
 
     def _render_undo_state(self, *_args) -> None:
         s = self.undo_stack
@@ -137,14 +133,7 @@ class ViewController(QObject):
     def _render_all(self) -> None:
         self._render_tree()
         self._render_undo_state()
-        for key in (SETTING_CONTROL_ENABLED, SETTING_REMOVE_EMPTY_GROUPS):
-            self._render_setting(key, self._model.get_setting(key))
-
-    def _render_setting(self, key: str, value) -> None:
-        if key == SETTING_CONTROL_ENABLED:
-            self._view.render_control_enabled(value)
-        elif key == SETTING_REMOVE_EMPTY_GROUPS:
-            self._view.render_remove_empty(value)
+        self._view.render_control_enabled(self._model.get_control_enabled())
 
     def _render_tree(self) -> None:
         def as_dict(node):
@@ -248,10 +237,9 @@ class ViewController(QObject):
             self._model.move_items_by_one(item_ids, up)
         self._view.render_selection(self._in_tree_order(item_ids))
 
-    def _on_expand(self, group_ids: list, expanded: bool) -> None:
+    def _on_expand(self, group_id: str, expanded: bool) -> None:
         # Expansion is UI state stored in the document; it is not undoable
-        for gid in group_ids:
-            self._model.set_expanded(gid, expanded)
+        self._model.set_expanded(group_id, expanded)
 
     def _on_check(self, item_id: str, checked: bool) -> None:
         # Visibility belongs to QGIS: ask for it, the Model will follow

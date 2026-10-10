@@ -82,8 +82,8 @@ panel both ways.
 ### New and removed layers
 
 A new layer appears next to its neighbour in the Layers panel. A removed
-layer disappears; with **Remove empty groups on layer delete** checked,
-groups left empty are removed too (the setting is saved with the project).
+layer disappears; its group stays, even if now empty, as in QGIS's Layers
+panel. Remove a group with **Remove Group**.
 
 ---
 
@@ -127,7 +127,6 @@ Group structure itself (creating, nesting) is only edited in ALO.
 | Project entry | Content |
 |---|---|
 | `AdvancedLayerOrder / tree_json` | The groups and the order: `{"version": 1, "children": [...]}` with group nodes (`id`, `name`, `expanded`, `children`) and layer nodes (`id`, `name`) |
-| `AdvancedLayerOrder / removeEmptyGroups` | The remove-empty-groups setting |
 
 Projects saved with *Layer Order Plus* or early builds of this plugin keep
 their groups: their `BetterLayerOrder` entries are read when no
@@ -145,8 +144,7 @@ tree and new ones are added next to their Layers-panel neighbour.
 
 The panel uses labels QGIS already has (Add Group, Move to Top, Undo,
 Control rendering order…), so they appear in QGIS's language without the
-plugin shipping translations. The few labels QGIS has no equivalent for
-stay in English.
+plugin shipping translations.
 
 ---
 

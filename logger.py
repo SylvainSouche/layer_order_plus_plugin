@@ -48,8 +48,4 @@ def set_verbose(enabled: bool) -> None:
     log.info("Verbose logging %s", "ON" if enabled else "OFF")
 
 
-def is_verbose() -> bool:
-    return log.isEnabledFor(logging.DEBUG)
-
-
 _install()

@@ -3,8 +3,9 @@
 What the Model owns
 -------------------
 * The ALO document: order groups, their nesting and expanded state, and
-  the draw order of the layers inside them.
-* The document setting ``remove_empty_groups``.
+  the draw order of the layers inside them. Groups are only ever removed
+  by the user: one emptied by layer deletions stays, as in QGIS's Layers
+  panel.
 
 What the Model mirrors (written only by the Controller, from QGIS)
 ------------------------------------------------------------------
@@ -56,10 +57,6 @@ class LayerNode:
     name: str
     visible: bool = True       # mirror of QGIS effective visibility
 
-    @property
-    def is_group(self) -> bool:
-        return False
-
 
 @dataclass
 class GroupNode:
@@ -68,10 +65,6 @@ class GroupNode:
     name: str
     expanded: bool = True
     children: list = field(default_factory=list)
-
-    @property
-    def is_group(self) -> bool:
-        return True
 
 
 Node = Union[GroupNode, LayerNode]   # runtime alias: no `|` (Python 3.9)
@@ -101,14 +94,11 @@ EVENT_LAYER_RENAMED = "layer_renamed"
 EVENT_GROUP_RENAMED = "group_renamed"
 EVENT_VISIBILITY_CHANGED = "visibility_changed"
 EVENT_EXPANDED_CHANGED = "expanded_changed"
-EVENT_SETTING_CHANGED = "setting_changed"     # payload: {"key", "value"}
+EVENT_CONTROL_CHANGED = "control_changed"     # payload: {"enabled"}
 
 # Trailing signal after any structural change: the flattened order may differ.
 # Payload {"resync": True} when it follows a model_loaded (already a full resync).
 EVENT_ORDER_CHANGED = "order_changed"
-
-SETTING_CONTROL_ENABLED = "control_enabled"
-SETTING_REMOVE_EMPTY_GROUPS = "remove_empty_groups"
 
 _STRUCTURAL_EVENTS = frozenset({
     EVENT_LAYER_ADDED, EVENT_LAYER_REMOVED, EVENT_GROUP_CREATED,
@@ -135,10 +125,7 @@ class LayerOrderModel:
         self._block_depth = 0
         self._suppressed = False          # something was emitted while blocked
         self._suppressed_structural = False
-        self._settings = {
-            SETTING_CONTROL_ENABLED: False,
-            SETTING_REMOVE_EMPTY_GROUPS: True,
-        }
+        self._control_enabled = False     # mirror of QGIS's hasCustomLayerOrder
 
     # ------------------------------------------------------------------
     # Listeners
@@ -291,31 +278,16 @@ class LayerOrderModel:
         return out
 
     # ------------------------------------------------------------------
-    # Settings
+    # Control of the rendering order (mirrored from QGIS)
     # ------------------------------------------------------------------
-    def get_setting(self, key: str):
-        return self._settings[key]
-
-    def set_setting(self, key: str, value) -> None:
-        if key not in self._settings:
-            raise KeyError(key)
-        if self._settings[key] == value:
-            return
-        self._settings[key] = value
-        self._emit(EVENT_SETTING_CHANGED, {"key": key, "value": value})
-
-    # Convenience accessors kept for readability at call sites / tests
-    def get_remove_empty_groups(self) -> bool:
-        return self._settings[SETTING_REMOVE_EMPTY_GROUPS]
-
-    def set_remove_empty_groups(self, value: bool) -> None:
-        self.set_setting(SETTING_REMOVE_EMPTY_GROUPS, bool(value))
-
     def get_control_enabled(self) -> bool:
-        return self._settings[SETTING_CONTROL_ENABLED]
+        return self._control_enabled
 
     def set_control_enabled(self, value: bool) -> None:
-        self.set_setting(SETTING_CONTROL_ENABLED, bool(value))
+        if self._control_enabled == bool(value):
+            return
+        self._control_enabled = bool(value)
+        self._emit(EVENT_CONTROL_CHANGED, {"enabled": self._control_enabled})
 
     # ------------------------------------------------------------------
     # Bulk operations
@@ -498,13 +470,7 @@ class LayerOrderModel:
         self._emit(EVENT_ORDER_CHANGED, {})
 
     def remove_layer(self, layer_id: str) -> None:
-        """Remove a layer.
-
-        With the remove-empty-groups setting, the groups this removal left
-        empty (its group, then that group's parents while they become empty)
-        are removed too. Other empty groups are left alone: an empty group
-        the user created on purpose survives unrelated deletions.
-        """
+        """Remove a layer. Its group stays, even if now empty."""
         self.remove_layers([layer_id])
 
     def remove_layers(self, layer_ids) -> None:
@@ -513,27 +479,22 @@ class LayerOrderModel:
         if not gone:
             return
         log.debug("remove_layers %d layer(s)", len(gone))
-        prune = self.get_remove_empty_groups()
-        events: list[tuple[str, dict]] = []
+        removed: list[str] = []
 
         def keep(nodes):
             out = []
             for n in nodes:
                 if isinstance(n, GroupNode):
-                    had_children = bool(n.children)
                     n.children = keep(n.children)
-                    if prune and had_children and not n.children:
-                        events.append((EVENT_GROUP_DELETED, {"group_id": n.id, "unwrapped_children": []}))
-                        continue
                 elif n.id in gone:
-                    events.append((EVENT_LAYER_REMOVED, {"layer_id": n.id}))
+                    removed.append(n.id)
                     continue
                 out.append(n)
             return out
         self._root = keep(self._root)
         self._dirty()
-        for event in events:
-            self._emit(*event)
+        for layer_id in removed:
+            self._emit(EVENT_LAYER_REMOVED, {"layer_id": layer_id})
         self._emit(EVENT_ORDER_CHANGED, {})
 
     def rename_layer(self, layer_id: str, new_name: str) -> None:
@@ -612,19 +573,6 @@ class LayerOrderModel:
     # ------------------------------------------------------------------
     # Moves
     # ------------------------------------------------------------------
-    def move_item(self, item_id: str, new_parent_id: str | None, new_index: int) -> bool:
-        """Index-based form of move_items() for scripting and tests.
-
-        `new_index` is a position in the target parent *before* the item is
-        taken out (i.e. "insert before the node currently at new_index").
-        """
-        parent = self.find_item(new_parent_id) if new_parent_id else None
-        siblings = self._siblings(parent if isinstance(parent, GroupNode) else None)
-        before = siblings[new_index].id if 0 <= new_index < len(siblings) else None
-        if before == item_id:
-            return False
-        return self.move_items([item_id], new_parent_id, before)
-
     def move_items(self, item_ids: list[str], new_parent_id: str | None,
                    before_id: str | None = None) -> bool:
         """Atomically move nodes into `new_parent_id` (None = top level).
@@ -720,37 +668,6 @@ class LayerOrderModel:
         if moved:
             self._dirty()
             self._structure_changed(EVENT_ITEM_MOVED, {"item_ids": list(item_ids)})
-
-    # ------------------------------------------------------------------
-    # Empty groups
-    # ------------------------------------------------------------------
-    def prune_empty_groups(self) -> int:
-        """Remove every group without children (cascading). Returns the count."""
-        removed = self._prune_empty_groups_internal()
-        if removed:
-            self._emit(EVENT_ORDER_CHANGED, {})
-        return removed
-
-    def _prune_empty_groups_internal(self) -> int:
-        removed = 0
-
-        def rec(children: list) -> None:
-            nonlocal removed
-            i = 0
-            while i < len(children):
-                ch = children[i]
-                if isinstance(ch, GroupNode):
-                    rec(ch.children)
-                    if not ch.children:
-                        children.pop(i)
-                        self._dirty()
-                        removed += 1
-                        self._emit(EVENT_GROUP_DELETED, {"group_id": ch.id, "unwrapped_children": []})
-                        continue
-                i += 1
-
-        rec(self._root)
-        return removed
 
     # ------------------------------------------------------------------
     # Persistence

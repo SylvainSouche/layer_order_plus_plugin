@@ -32,8 +32,8 @@ knows all of them.
 
 | Piece | Does | Never |
 |---|---|---|
-| **Model** `model.py` | Holds the document (groups, nesting, order, expanded, `remove_empty_groups`) and mirrors QGIS facts (layer names, effective visibility, `control_enabled`). All mutations, each followed by an event. | Import Qt or QGIS. |
-| **View** `view.py`, `tree_model.py`, `tree_view.py` | Renders what it is told (`render*`). Emits one intent signal per user action, carrying all data needed (ids, target, flag). Keeps presentation state: selection, scroll. `tree_model.py` is the Qt item model presenting the rendered tree; `tree_view.py` the QTreeView. | Change what it displays because of its own input. Drops, checkbox clicks, branch arrows and settings boxes are reported, not applied. Read the Model. |
+| **Model** `model.py` | Holds the document (groups, nesting, order, expanded) and mirrors QGIS facts (layer names, effective visibility, `control_enabled`). All mutations, each followed by an event. | Import Qt or QGIS. |
+| **View** `view.py`, `tree_model.py`, `tree_view.py` | Renders what it is told (`render*`). Emits one intent signal per user action, carrying all data needed (ids, target, flag). Keeps presentation state: selection, scroll. `tree_model.py` is the Qt item model presenting the rendered tree; `tree_view.py` the QTreeView. | Change what it displays because of its own input. Drops, checkbox clicks, branch arrows and the control box are reported, not applied. Read the Model. |
 | **ViewController** `view_controller.py` | Turns intents into Model transactions (one undo step each) or into requests for QGIS-owned state. Turns Model events into `render*` calls. | Touch QGIS. Read state back from the View. |
 | **Controller** `controller.py` | Mirrors QGIS into the Model; applies the Model's order to QGIS; persists the document; reconciles with the stock Layer Order panel. | Touch the View or the ViewController. |
 | **reconcile.py** | Pure function: infer the group tree for a new flat order. | Side effects. |
@@ -45,7 +45,6 @@ knows all of them.
 |---|---|---|---|---|
 | Groups, nesting, order | Model | ViewController (user), Controller (reconcile, layers added/removed) | yes: ALO edits and QGIS-panel reorders (one linear history; the Controller reports `external_edit`, the ViewController records it) | yes |
 | Group expanded | Model | ViewController | no | yes |
-| `remove_empty_groups` | Model | ViewController | no | own project entry |
 | Layer set | QGIS | Controller | no | – |
 | Layer names | QGIS | Controller | no | (informative copy) |
 | Layer visibility | QGIS | Controller (on request) | no | no |
@@ -63,7 +62,7 @@ The Model emits `(event_type, payload)`:
 * structural: `layer_added`, `layer_removed`, `group_created`,
   `group_deleted`, `item_moved` — always followed by `order_changed`;
 * display: `layer_renamed`, `group_renamed`, `visibility_changed`,
-  `expanded_changed`, `setting_changed`;
+  `expanded_changed`, `control_changed`;
 * `model_loaded` — "resync everything". Emitted by load/replace/restore and
   at the end of a `block_notifications()` batch; the `order_changed` that
   follows it carries `{"resync": True}`.

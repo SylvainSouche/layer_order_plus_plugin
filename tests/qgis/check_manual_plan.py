@@ -252,16 +252,10 @@ expect("7.3", "ABCD[AB[A, B], CD[F2, C, D]], E", "A B F2 C D E", "A")
 proj.removeMapLayer(f_layer.id())
 expect("7.4", BASE, "A B C D E", "A")
 proj.removeMapLayers([lid("C"), lid("D")])
-expect("7.5", "ABCD[AB[A, B]], E", "A B E", "A")
+expect("7.5", "ABCD[AB[A, B], CD[]], E", "A B E", "A")     # groups are kept
 baseline()
-view.chk_remove_empty.click()
-proj.removeMapLayers([lid("C"), lid("D")])
-expect("7.6", "ABCD[AB[A, B], CD[]], E", "A B E")
-baseline()
-if not model.get_remove_empty_groups():
-    view.chk_remove_empty.click()
 view.ask_text = lambda *a: "Later"
 view.create_group_requested.emit([])
 proj.removeMapLayer(lid("E"))
-expect("7.7", "ABCD[AB[A, B], CD[C, D]], Later[]", "A B C D")
+expect("7.6", "ABCD[AB[A, B], CD[C, D]], Later[]", "A B C D")
 finish()

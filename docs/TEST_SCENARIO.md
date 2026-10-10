@@ -183,9 +183,8 @@ Reopen the baseline. The rows are cumulative unless they say otherwise.
 | 7.2 | Rename F to "F2" in the Layers panel | renamed | renamed | — |
 | 7.3 | Select B → **▲**, then **↶ Undo** | after ▲: `AB[B, A]`; after Undo: `ABCD[AB[A, B], CD[F2, C, D]], E`: the move is undone, **F2 stays** | `A B F2 C D E` | centre red |
 | 7.4 | Remove F2 | `ABCD[AB[A, B], CD[C, D]], E` | `A B C D E` | purple gone |
-| 7.5 | *Remove empty groups* **on**: remove C and D | `ABCD[AB[A, B]], E` (CD removed) | `A B E` | yellow and green gone |
-| 7.6 | Reopen the baseline; *Remove empty groups* **off**; remove C and D | `ABCD[AB[A, B], CD[]], E` (the empty CD is kept) | `A B E` | — |
-| 7.7 | Reopen the baseline; *Remove empty groups* **on**; nothing selected → Add Group "Later"; remove E | `ABCD[AB[A, B], CD[C, D]], Later[]`: **Later survives** | `A B C D` | blue gone |
+| 7.5 | Remove C and D | `ABCD[AB[A, B], CD[]], E`: the emptied CD is **kept** (as in QGIS's Layers panel) | `A B E` | yellow and green gone |
+| 7.6 | Reopen the baseline; nothing selected → Add Group "Later"; remove E | `ABCD[AB[A, B], CD[C, D]], Later[]`: **Later survives** | `A B C D` | blue gone |
 
 ![F added above C](img/test-map-ABFCDE.png)
 
@@ -203,7 +202,7 @@ Reopen the baseline. The rows are cumulative.
 | 8.6 | Toggle editing on layer A, move a vertex; focus in the **ALO panel**, Ctrl+Z | QGIS undoes the vertex move; the layer order doesn't change; then stop editing without saving |
 | 8.7 | Collapse ABCD, then **↶ Undo** | ABCD stays collapsed (expansion isn't undone) |
 | 8.8 | Reopen the baseline. ALO: ▲ on B. **Native** panel: drag D above C. Then **↶ Undo** twice, then **↷ Redo** twice | 1st Undo: D back below C (native `B A C D E`), tooltip was "Undo: Layer Order"; 2nd: B back below A (`A B C D E`, centre red); the two Redo replay both (`B A D C E`, centre orange) |
-| 8.9 | Set QGIS's language to French (Settings → Options → General → Override system locale, restart) | toolbar tooltips "Ajouter un groupe", "Monter", "Annuler"…; checkbox "Contrôler l'ordre de rendu"; context menu "Déplacer au-dessus" / "Déplacer en bas"; "Remove empty groups on layer delete" stays in English; no *Verbose logging* box without `QGIS_DEBUG` |
+| 8.9 | Set QGIS's language to French (Settings → Options → General → Override system locale, restart) | toolbar tooltips "Ajouter un groupe", "Monter", "Annuler"…; checkbox "Contrôler l'ordre de rendu"; context menu "Déplacer au-dessus" / "Déplacer en bas"; no *Verbose logging* box without `QGIS_DEBUG` |
 
 ## 9. Saving, closing, switching projects, restarting
 
