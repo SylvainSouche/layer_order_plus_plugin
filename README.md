@@ -46,10 +46,13 @@ renders and reports intents, the Controller is the only piece that talks to
 QGIS. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before changing it.
 Manual acceptance: [`docs/TEST_SCENARIO.md`](docs/TEST_SCENARIO.md).
 
-To release: bump [`VERSION`](VERSION), add a line to the `changelog` in
-`metadata.txt`, `make zip`.
+Releasing: [`docs/RELEASING.md`](docs/RELEASING.md). Version history:
+[`VERSION.md`](VERSION.md).
 
 ## History
+
+Maintained by **Sylvain Souche**, with the agreement of the original
+author, Samuel Kultz.
 
 * **1.0.0** — original plugin by **Samuel Kultz (Kultz Engenharia)**:
   https://github.com/samkultz/layer_order_plus_plugin ·
@@ -57,6 +60,8 @@ To release: bump [`VERSION`](VERSION), add a line to the `changelog` in
 * **1.0.x – 1.1.0** — this fork: QGIS 4 / PyQt6 port, undo restoring the
   map order, icons, visibility, persistence schema.
 * **1.2.x** — rewritten as a model / view / controller design; sync with
-  QGIS's Layer Order panel. Details in the `changelog` of `metadata.txt`.
+  QGIS's Layer Order panel.
+* **1.3.x** — move up / down, packaging for plugins.qgis.org, manual test
+  plan with verifiable data. Details in [`VERSION.md`](VERSION.md).
 
 Fork: https://github.com/SylvainSouche/layer_order_plus_plugin · MIT — see [`LICENSE`](LICENSE).

@@ -56,7 +56,8 @@ test-data:
 
 # The plugin folder name inside the zip is the plugin's identity in QGIS
 # (and on plugins.qgis.org): never derive it from the checkout folder.
-PLUGIN_FOLDER := layer_order_plus_plugin
+# Pending the first publication — see docs/RELEASING.md
+PLUGIN_FOLDER ?= layer_order_plus_plugin
 # Runtime files only (plus the user guide and history); no dev files,
 # no hidden files, no executable bits.
 RUNTIME_FILES := $(sort $(wildcard $(PLUGIN_DIR)/*.py)) \
