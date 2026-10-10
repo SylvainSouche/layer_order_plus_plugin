@@ -421,7 +421,7 @@ def test_undo_redo_buttons(mvc):
     mvc.load(["A", "B", "C"])
     assert not view.btn_undo.isEnabled() and not view.btn_redo.isEnabled()
     mvc.drop(["A"], "C", DROP_BELOW)                         # B C A
-    assert view.btn_undo.isEnabled() and view.btn_undo.toolTip() == "Undo: Reorder layers"
+    assert view.btn_undo.isEnabled() and view.btn_undo.toolTip() == "Undo: Move Items"
     view.btn_undo.click()
     assert _model_shape(mvc.model.get_root()) == ["A", "B", "C"]
     assert view.btn_redo.isEnabled() and not view.btn_undo.isEnabled()

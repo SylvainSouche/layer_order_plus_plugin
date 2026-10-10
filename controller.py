@@ -27,6 +27,7 @@ import logging
 from qgis.core import QgsLayerTree, QgsProject
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 
+from .i18n import LAYER_ORDER, tr
 from .model import (
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_RENAMED,
@@ -376,7 +377,7 @@ class LayerOrderController(QObject):
         log.info("reconciled with the QGIS order (dragged: %s)", sorted(dragged))
         before = self._model.serialize()
         self._model.replace_root(new_root)
-        self.external_edit.emit(before, self._model.serialize(), "Reorder in QGIS's Layer Order panel")
+        self.external_edit.emit(before, self._model.serialize(), tr(LAYER_ORDER))
 
     def _apply_custom_order(self) -> None:
         """Write the Model's flattened order to QGIS's custom layer order."""

@@ -173,7 +173,7 @@ for step, args, tree, order, top in [
     ("3.2", (["E"], "D", DROP_BELOW), "ABCD[AB[A, B], CD[C, D, E]]", "A B C D E", "A"),
     ("3.3", (["E"], "AB", DROP_ON), "ABCD[AB[A, B, E], CD[C, D]]", "A B E C D", "A"),
     ("3.4", (["C"], "", DROP_END), "ABCD[AB[A, B], CD[D]], E, C", "A B D E C", "A"),
-    ("3.5", (["E"], "C", DROP_ON), "ABCD[AB[A, B], CD[New group[C, E], D]]", "A B C E D", "A"),
+    ("3.5", (["E"], "C", DROP_ON), "ABCD[AB[A, B], CD[New Group[C, E], D]]", "A B C E D", "A"),
     ("3.7", (["D", "C"], "A", DROP_ABOVE), "ABCD[AB[C, D, A, B], CD[]], E", "C D A B E", "C"),
 ]:
     baseline()

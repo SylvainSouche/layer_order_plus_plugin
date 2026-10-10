@@ -164,6 +164,16 @@ selected blocks move together and nothing ever leaves its group.
   invariants the bounds rely on (the Model's id index never stale, batch
   edits equal one-by-one edits).
 
+## Translations
+
+No translation files are shipped. `i18n.py` lists the panel's labels as
+QGIS catalog entries (context + English text, e.g.
+`("QgsLayerTreeViewDefaultActions", "Move to &Top")`); `tr()` looks them
+up with `QCoreApplication.translate`, so the translator QGIS installs at
+startup shows them in the user's language. Labels QGIS has no entry for
+stay in English. `tests/qgis/check_i18n.py` fails if a future QGIS
+renames one of the borrowed entries.
+
 ## QGIS 3 and QGIS 4
 
 One package runs on QGIS 3.40 / 3.44 (Qt 5.15, PyQt5) and QGIS 4.x (Qt 6,

@@ -27,6 +27,19 @@ from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
 
 from .compat import QUndoStack
+from .i18n import (
+    ADD_GROUP,
+    GROUP_NAME,
+    MOVE_DOWN,
+    MOVE_ITEMS,
+    MOVE_TO_BOTTOM,
+    MOVE_TO_TOP,
+    MOVE_UP,
+    NEW_GROUP,
+    REMOVE_GROUP,
+    RENAME_GROUP,
+    tr,
+)
 from .model import (
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_RENAMED,
@@ -166,7 +179,8 @@ class ViewController(QObject):
     def _on_create_group(self, selected_ids: list) -> None:
         model = self._model
         selected = self._in_tree_order(selected_ids)
-        name = self._view.ask_text("New group", "Group name:", model.unique_group_name())
+        default = model.unique_group_name(tr(NEW_GROUP))
+        name = self._view.ask_text(tr(NEW_GROUP), f"{tr(GROUP_NAME)}:", default)
         if name is None:
             return
         if name in model.get_group_names():
@@ -187,7 +201,7 @@ class ViewController(QObject):
         else:
             parent_id, index, movers = None, None, []
 
-        with self._user_edit("Create group"):
+        with self._user_edit(tr(ADD_GROUP)):
             gid = model.create_group(name, parent_id=parent_id, index=index)
             if movers:
                 model.move_items(movers, gid)
@@ -198,26 +212,26 @@ class ViewController(QObject):
         node = self._model.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
-        name = self._view.ask_text("Rename group", "Group name:", node.name)
+        name = self._view.ask_text(tr(RENAME_GROUP), f"{tr(GROUP_NAME)}:", node.name)
         if name is None or name == node.name:
             return
         if name in self._model.get_group_names() - {node.name}:
             name = self._model.unique_group_name(name)
-        with self._user_edit("Rename group"):
+        with self._user_edit(tr(RENAME_GROUP)):
             self._model.rename_group(group_id, name)
 
     def _on_delete_groups(self, group_ids: list) -> None:
         if not group_ids:
             return
         ordered = sorted(group_ids, key=self._model.get_depth, reverse=True)  # deepest first
-        with self._user_edit("Delete group" if len(ordered) == 1 else f"Delete {len(ordered)} groups"):
+        with self._user_edit(tr(REMOVE_GROUP)):
             for gid in ordered:
                 self._model.delete_group(gid, unwrap_children=True)
 
     def _on_move_to_boundary(self, item_ids: list, to_top: bool) -> None:
         if not item_ids:
             return
-        with self._user_edit("Move to top" if to_top else "Move to bottom"):
+        with self._user_edit(tr(MOVE_TO_TOP if to_top else MOVE_TO_BOTTOM)):
             self._model.move_items_to_boundary(item_ids, to_top=to_top)
         self._view.render_selection(item_ids)
 
@@ -230,7 +244,7 @@ class ViewController(QObject):
     def _on_move_by_one(self, item_ids: list, up: bool) -> None:
         if not item_ids:
             return
-        with self._user_edit("Move up" if up else "Move down"):
+        with self._user_edit(tr(MOVE_UP if up else MOVE_DOWN)):
             self._model.move_items_by_one(item_ids, up)
         self._view.render_selection(self._in_tree_order(item_ids))
 
@@ -261,7 +275,7 @@ class ViewController(QObject):
         log.debug("drop: moving=%s target=%s pos=%s", movers, target_id, position)
 
         if position == DROP_END:
-            with self._user_edit("Reorder layers"):
+            with self._user_edit(tr(MOVE_ITEMS)):
                 model.move_items(movers, None, None)
             self._view.render_selection(movers)
             return
@@ -273,10 +287,10 @@ class ViewController(QObject):
         parent = model.find_parent(target_id)
         parent_id = parent.id if parent is not None else None
 
-        with self._user_edit("Reorder layers"):
+        with self._user_edit(tr(MOVE_ITEMS)):
             if position == DROP_ON and isinstance(target, LayerNode):
                 # Onto a layer → new group at the target's slot: [target, movers...]
-                gid = model.create_group(model.unique_group_name(), parent_id=parent_id,
+                gid = model.create_group(model.unique_group_name(tr(NEW_GROUP)), parent_id=parent_id,
                                          index=model.get_index_in_parent(target_id))
                 if model.move_items([target_id, *movers], gid):
                     model.set_expanded(gid, True)

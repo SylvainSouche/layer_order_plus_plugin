@@ -19,6 +19,8 @@ and turns drops / checkbox clicks into intents; ``LayerOrderTree``
 """
 from __future__ import annotations
 
+import os
+
 from qgis.PyQt.QtCore import QItemSelectionModel, QSize, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
@@ -31,6 +33,20 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .i18n import (
+    ADD_GROUP,
+    CONTROL_RENDERING_ORDER,
+    DRAG_TO_REORDER,
+    MOVE_DOWN,
+    MOVE_TO_BOTTOM,
+    MOVE_TO_TOP,
+    MOVE_UP,
+    REDO,
+    REMOVE_GROUP,
+    RENAME_GROUP,
+    UNDO,
+    tr,
+)
 from .icons import (
     icon_add_group,
     icon_move_down,
@@ -43,20 +59,6 @@ from .icons import (
 from .model import TYPE_GROUP
 from .tree_model import ROLE_ID, ROLE_TYPE, LayerOrderItemModel
 from .tree_view import LayerOrderTree
-
-_TREE_TOOLTIP = (
-    "Drag layers and groups to set draw order (top of tree = drawn on top).\n\n"
-    "Drop rules:\n"
-    "  • Drop ON a layer → creates a new group containing the target layer and the dropped items\n"
-    "  • Drop ON a group → moves the dropped items to the end of that group\n"
-    "  • Drop ABOVE an item → reorders just above that item\n"
-    "  • Drop BELOW an item → reorders just below that item\n"
-    "  • Drop in the empty area → moves to the bottom of the list\n\n"
-    "Move up / down: toolbar arrows or Ctrl+↑ / Ctrl+↓ (⌘ on macOS); items stay in their group.\n"
-    "Right-click for: Create / Rename / Delete group, Expand / Collapse,\n"
-    "Move up / down / to top / to bottom.\n"
-    "Double-click a group to expand or collapse it."
-)
 
 
 class _ReportingCheckBox(QCheckBox):
@@ -116,19 +118,19 @@ class LayerOrderView(QDockWidget):
             b.setIconSize(QSize(16, 16))
             return b
 
-        self.btn_add_group = tool_button(icon_add_group(), "Create group")
-        self.btn_rename_group = tool_button(icon_rename_group(), "Rename group")
-        self.btn_del_group = tool_button(icon_remove_group(), "Delete group")
-        self.btn_move_up = tool_button(icon_move_up(), "Move up (Ctrl+↑)")
-        self.btn_move_down = tool_button(icon_move_down(), "Move down (Ctrl+↓)")
+        self.btn_add_group = tool_button(icon_add_group(), tr(ADD_GROUP))
+        self.btn_rename_group = tool_button(icon_rename_group(), tr(RENAME_GROUP))
+        self.btn_del_group = tool_button(icon_remove_group(), tr(REMOVE_GROUP))
+        self.btn_move_up = tool_button(icon_move_up(), f"{tr(MOVE_UP)} (Ctrl+↑)")
+        self.btn_move_down = tool_button(icon_move_down(), f"{tr(MOVE_DOWN)} (Ctrl+↓)")
         for b in (self.btn_add_group, self.btn_rename_group, self.btn_del_group):
             head.addWidget(b)
         head.addSpacing(8)
         head.addWidget(self.btn_move_up)
         head.addWidget(self.btn_move_down)
         head.addSpacing(8)
-        self.btn_undo = tool_button(icon_undo(), "Undo")
-        self.btn_redo = tool_button(icon_redo(), "Redo")
+        self.btn_undo = tool_button(icon_undo(), tr(UNDO))
+        self.btn_redo = tool_button(icon_redo(), tr(REDO))
         head.addWidget(self.btn_undo)
         head.addWidget(self.btn_redo)
         self._undo_state = (False, "", False, "")
@@ -136,26 +138,18 @@ class LayerOrderView(QDockWidget):
 
         self.tree = LayerOrderTree()
         self.tree.setModel(self.item_model)
-        self.tree.setToolTip(_TREE_TOOLTIP)
+        self.tree.setToolTip(tr(DRAG_TO_REORDER))
         self.tree.setIconSize(QSize(16, 16))
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lay.addWidget(self.tree)
 
-        self.chk_control = _ReportingCheckBox("Control rendering order")
-        self.chk_control.setToolTip(
-            "When checked, this panel drives the map draw order (custom layer order). "
-            "When unchecked, QGIS uses the default Layers-panel order."
-        )
+        # Labels QGIS has are translated by QGIS (i18n.py); the others stay in English
+        self.chk_control = _ReportingCheckBox(tr(CONTROL_RENDERING_ORDER))
         self.chk_remove_empty = _ReportingCheckBox("Remove empty groups on layer delete")
-        self.chk_remove_empty.setToolTip(
-            "When checked, order groups that become empty after their last layer is "
-            "removed are deleted automatically. When unchecked, empty groups are kept."
-        )
+        # Debug aid only: shown when QGIS runs with QGIS_DEBUG set
+        # (Settings → Options → System → Environment)
         self.chk_verbose = _ReportingCheckBox("Verbose logging (AdvancedLayerOrder log tab)")
-        self.chk_verbose.setToolTip(
-            "Log every step of drag-drop and sync to the AdvancedLayerOrder tab in "
-            "View → Panels → Log Messages. OFF by default."
-        )
+        self.chk_verbose.setVisible(bool(os.environ.get("QGIS_DEBUG")))
         for c in (self.chk_control, self.chk_remove_empty, self.chk_verbose):
             lay.addWidget(c)
 
@@ -256,20 +250,16 @@ class LayerOrderView(QDockWidget):
         groups = self.selected_group_ids()
 
         menu = QMenu(self)
-        act_create = menu.addAction(icon_add_group(), "Create group")
-        act_rename = menu.addAction(icon_rename_group(), "Rename group")
-        act_delete = menu.addAction(icon_remove_group(), "Delete group")
+        act_create = menu.addAction(icon_add_group(), tr(ADD_GROUP))
+        act_rename = menu.addAction(icon_rename_group(), tr(RENAME_GROUP))
+        act_delete = menu.addAction(icon_remove_group(), tr(REMOVE_GROUP))
         menu.addSeparator()
-        act_expand = menu.addAction("Expand group")
-        act_collapse = menu.addAction("Collapse group")
-        menu.addSeparator()
-        act_up = menu.addAction(icon_move_up(), "Move up")
-        act_down = menu.addAction(icon_move_down(), "Move down")
-        act_top = menu.addAction("Move to top")
-        act_bottom = menu.addAction("Move to bottom")
+        act_up = menu.addAction(icon_move_up(), tr(MOVE_UP))
+        act_down = menu.addAction(icon_move_down(), tr(MOVE_DOWN))
+        act_top = menu.addAction(tr(MOVE_TO_TOP))
+        act_bottom = menu.addAction(tr(MOVE_TO_BOTTOM))
         act_rename.setEnabled(len(groups) == 1)
-        for a in (act_delete, act_expand, act_collapse):
-            a.setEnabled(bool(groups))
+        act_delete.setEnabled(bool(groups))
         for a in (act_up, act_down, act_top, act_bottom):
             a.setEnabled(bool(ids))
 
@@ -280,10 +270,6 @@ class LayerOrderView(QDockWidget):
             self.rename_group_requested.emit(groups[0])
         elif chosen is act_delete:
             self.delete_groups_requested.emit(groups)
-        elif chosen is act_expand:
-            self.expand_requested.emit(groups, True)
-        elif chosen is act_collapse:
-            self.expand_requested.emit(groups, False)
         elif chosen is act_up:
             self.move_by_one_requested.emit(ids, True)
         elif chosen is act_down:
@@ -352,8 +338,9 @@ class LayerOrderView(QDockWidget):
     def render_undo_state(self, can_undo: bool, undo_text: str, can_redo: bool, redo_text: str):
         """Undo / Redo buttons: availability and the step they would act on."""
         self._undo_state = (can_undo, undo_text, can_redo, redo_text)
-        self.btn_undo.setToolTip(f"Undo: {undo_text}" if can_undo and undo_text else "Undo")
-        self.btn_redo.setToolTip(f"Redo: {redo_text}" if can_redo and redo_text else "Redo")
+        undo, redo = tr(UNDO), tr(REDO)
+        self.btn_undo.setToolTip(f"{undo}: {undo_text}" if can_undo and undo_text else undo)
+        self.btn_redo.setToolTip(f"{redo}: {redo_text}" if can_redo and redo_text else redo)
         self._update_group_buttons()
 
     def render_remove_empty(self, checked: bool):

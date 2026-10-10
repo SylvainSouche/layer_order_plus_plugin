@@ -48,13 +48,12 @@ Layer Order panel; they always agree.
 
 | Action | Effect |
 |---|---|
-| **Create group** | New group with a unique name, wrapping the selected items (it takes their place). Exception: with a single group selected, an empty subgroup is created at its top. Nothing selected: an empty group at the bottom. |
-| **Rename group** | Exactly one group selected. |
-| **Delete group** | One or more groups selected; their contents take their place. |
-| **Expand / Collapse group** | Context menu. |
+| **Add Group** | New group with a unique name, wrapping the selected items (it takes their place). Exception: with a single group selected, an empty subgroup is created at its top. Nothing selected: an empty group at the bottom. |
+| **Rename Group** | Exactly one group selected. |
+| **Remove Group** | One or more groups selected; their contents take their place. |
 | **↶ Undo / ↷ Redo** | Toolbar. Undo / redo the last layer-order step (see section 5). |
 | **Move up / Move down** | Toolbar arrows, context menu, or **Ctrl+↑ / Ctrl+↓** (⌘ on macOS). Each selected item moves one step within its own group; adjacent selected items move together; an item already first/last in its group stays (use drag and drop to leave a group). One undo step. |
-| **Move to top / bottom** | Context menu: each selected item goes to the top/bottom of its own group, keeping their order. |
+| **Move to Top / Bottom** | Context menu: each selected item goes to the top/bottom of its own group, keeping their order. |
 
 Double-click a group (or click its arrow, or ←/→) to expand/collapse it.
 
@@ -142,16 +141,27 @@ tree and new ones are added next to their Layers-panel neighbour.
 
 ---
 
-## 7. Troubleshooting
+## 7. Languages
 
-Check **Verbose logging** at the bottom of the panel, then open
-**View → Panels → Log Messages**, tab **AdvancedLayerOrder**: drops, model
-changes, reconciliations with QGIS's panel and applied orders are traced.
-Errors are always logged there.
+The panel uses labels QGIS already has (Add Group, Move to Top, Undo,
+Control rendering order…), so they appear in QGIS's language without the
+plugin shipping translations. The few labels QGIS has no equivalent for
+stay in English.
 
 ---
 
-## 8. Credits and license
+## 8. Troubleshooting
+
+Errors are always logged in **View → Panels → Log Messages**, tab
+**AdvancedLayerOrder**. For a detailed trace (drops, model changes,
+reconciliations with QGIS's panel, applied orders), start QGIS with the
+environment variable `QGIS_DEBUG=1` (**Settings → Options → System →
+Environment**, then restart QGIS): a **Verbose logging** box appears at
+the bottom of the panel.
+
+---
+
+## 9. Credits and license
 
 * **Original plugin:** *Layer Order Plus* 1.0.0 (QGIS 3), Samuel Kultz —
   https://github.com/samkultz/layer_order_plus_plugin
