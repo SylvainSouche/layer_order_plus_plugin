@@ -2,7 +2,7 @@
 
 Renders tests/data/test.qgz headless and samples pixels: whatever the
 order, the centre has the colour of the top layer and every disc shows its
-own colour in its outer part. Also checks how Layer Order Plus first sees
+own colour in its outer part. Also checks how Advanced Layer Order first sees
 the project. With --snapshots DIR, writes the reference images used in
 docs/TEST_SCENARIO.md.
 """
@@ -15,8 +15,8 @@ from qgis.core import QgsMapRendererParallelJob, QgsMapSettings, QgsProject, Qgs
 from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtGui import QColor
 
-from layer_order_plus_qgis4.controller import LayerOrderController
-from layer_order_plus_qgis4.model import LayerOrderModel
+from advanced_layer_order.controller import LayerOrderController
+from advanced_layer_order.model import LayerOrderModel
 
 DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 sys.path.insert(0, DATA)
@@ -80,12 +80,12 @@ for order, expected in (("ABFCDE", f_colour), ("ABCFDE", spec.LAYERS["C"][0])):
     if snapshots and order == "ABFCDE":
         image.save(os.path.join(snapshots, "test-map-ABFCDE.png"))
 
-# How Layer Order Plus first sees this project: no saved tree → the
+# How Advanced Layer Order first sees this project: no saved tree → the
 # Layers-panel order, control off
 model = LayerOrderModel()
 ctl = LayerOrderController(model, FakeIface())
 ctl.load_project()
 pump()
 names = "".join(proj.mapLayer(i).name() for i in model.get_flattened_layer_ids())
-check(names == "ABCDE" and not model.get_control_enabled(), f"Plus initial state {names}")
+check(names == "ABCDE" and not model.get_control_enabled(), f"ALO initial state {names}")
 finish()

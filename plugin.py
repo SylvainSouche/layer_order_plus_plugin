@@ -1,4 +1,4 @@
-"""Layer Order Plus — Plugin: builds the pieces, wires them, owns the lifecycle.
+"""Advanced Layer Order — Plugin: builds the pieces, wires them, owns the lifecycle.
 
 Architecture
 ------------
@@ -29,10 +29,10 @@ from .model import LayerOrderModel
 from .view import LayerOrderView
 from .view_controller import ViewController
 
-MENU = "Layer Order Plus"
+MENU = "Advanced Layer Order"
 
 
-class LayerOrderPlusPlugin(QObject):
+class AdvancedLayerOrderPlugin(QObject):
     """QGIS plugin entry point (see classFactory in __init__.py)."""
 
     def __init__(self, iface):

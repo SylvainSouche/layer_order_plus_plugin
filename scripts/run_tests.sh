@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Layer Order Plus unit tests.
+# Run the Advanced Layer Order unit tests.
 #
 # Sets up LD_LIBRARY_PATH so PyQt6's QtWidgets can find libEGL.so.1
 # (extracted into tests/vendor/ by tests/setup_libegl.sh), then runs pytest.

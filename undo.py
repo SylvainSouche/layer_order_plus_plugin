@@ -1,4 +1,4 @@
-"""Undo command for Layer Order Plus document edits.
+"""Undo command for Advanced Layer Order document edits.
 
 A TreeStateCommand holds the document JSON before and after one user
 action. Undo/redo restore it through Model.restore_structure(), which keeps

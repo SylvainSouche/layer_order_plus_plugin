@@ -1,8 +1,8 @@
-"""Layer Order Plus — Model: the single source of truth (plain Python, no Qt, no QGIS).
+"""Advanced Layer Order — Model: the single source of truth (plain Python, no Qt, no QGIS).
 
 What the Model owns
 -------------------
-* The Plus document: order groups, their nesting and expanded state, and
+* The ALO document: order groups, their nesting and expanded state, and
   the draw order of the layers inside them.
 * The document setting ``remove_empty_groups``.
 
@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-log = logging.getLogger("LayerOrderPlus.model")
+log = logging.getLogger("AdvancedLayerOrder.model")
 
 
 # ====================================================================

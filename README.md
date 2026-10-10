@@ -1,4 +1,4 @@
-# Layer Order Plus (QGIS 4)
+# Advanced Layer Order
 
 **QGIS's Layer Order panel, with groups.**
 
@@ -28,7 +28,7 @@ User guide: [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md).
 
 ## Install
 
-1. `make zip` → `dist/layer_order_plus_qgis4-<VERSION>.zip`
+1. `make zip` → `dist/advanced_layer_order-<VERSION>.zip`
 2. QGIS: **Plugins → Manage and Install Plugins → Install from ZIP**
 
 ## Develop
@@ -51,17 +51,20 @@ Releasing: [`docs/RELEASING.md`](docs/RELEASING.md). Version history:
 
 ## History
 
-Maintained by **Sylvain Souche**, with the agreement of the original
-author, Samuel Kultz.
+Advanced Layer Order is the QGIS 4 continuation of **Layer Order Plus**
+by **Samuel Kultz (Kultz Engenharia)**, published as a new plugin and
+maintained by **Sylvain Souche** with his agreement.
 
-* **1.0.0** — original plugin by **Samuel Kultz (Kultz Engenharia)**:
+* **1.0.0** — *Layer Order Plus*, the original plugin by Samuel Kultz:
   https://github.com/samkultz/layer_order_plus_plugin ·
   https://plugins.qgis.org/plugins/layer_order_plus/ (QGIS 3).
-* **1.0.x – 1.1.0** — this fork: QGIS 4 / PyQt6 port, undo restoring the
+* **1.0.x – 1.1.0** — QGIS 4 / PyQt6 port, undo restoring the
   map order, icons, visibility, persistence schema.
 * **1.2.x** — rewritten as a model / view / controller design; sync with
   QGIS's Layer Order panel.
 * **1.3.x** — move up / down, packaging for plugins.qgis.org, manual test
-  plan with verifiable data. Details in [`VERSION.md`](VERSION.md).
+  plan with verifiable data; published as *Advanced Layer Order*. Details
+  in [`VERSION.md`](VERSION.md).
 
-Fork: https://github.com/SylvainSouche/layer_order_plus_plugin · MIT — see [`LICENSE`](LICENSE).
+Repository: https://github.com/SylvainSouche/qgis_advanced_layer_order ·
+MIT — see [`LICENSE`](LICENSE).

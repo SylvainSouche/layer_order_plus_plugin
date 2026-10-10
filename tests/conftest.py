@@ -1,4 +1,4 @@
-"""Test configuration for Layer Order Plus unit tests.
+"""Test configuration for Advanced Layer Order unit tests.
 
 These tests run WITHOUT QGIS installed. We provide stub `qgis.*` modules so
 that `from qgis.PyQt.QtCore import Qt` and similar imports resolve to PyQt6
@@ -186,14 +186,14 @@ _install_qgis_stubs()
 
 
 def _register_plugin_package():
-    """Make the plugin importable as `layer_order_plus_qgis4` (its folder name
+    """Make the plugin importable as `advanced_layer_order` (its folder name
     differs) without running __init__.py, for every test module."""
-    if "layer_order_plus_qgis4" in sys.modules:
+    if "advanced_layer_order" in sys.modules:
         return
     plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    pkg = types.ModuleType("layer_order_plus_qgis4")
+    pkg = types.ModuleType("advanced_layer_order")
     pkg.__path__ = [plugin_root]
-    sys.modules["layer_order_plus_qgis4"] = pkg
+    sys.modules["advanced_layer_order"] = pkg
 
 
 _register_plugin_package()

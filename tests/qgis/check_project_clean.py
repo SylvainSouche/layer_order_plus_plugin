@@ -1,5 +1,5 @@
 """Opening a saved project must not mark it modified (no spurious
-"Save changes?" on close), whether Plus controls the order or not."""
+"Save changes?" on close), whether ALO controls the order or not."""
 import os
 import tempfile
 

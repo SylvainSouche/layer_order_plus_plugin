@@ -1,4 +1,4 @@
-"""Layer Order Plus — ViewController: View intents → Model, Model events → View.
+"""Advanced Layer Order — ViewController: View intents → Model, Model events → View.
 
 The ViewController is the only object that talks to both the View and the
 Model, and it does exactly two things:
@@ -44,7 +44,7 @@ from .tree_model import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
 from .undo import TreeStateCommand
 from .view import LayerOrderView
 
-log = logging.getLogger("LayerOrderPlus.view_controller")
+log = logging.getLogger("AdvancedLayerOrder.view_controller")
 
 
 class ViewController(QObject):

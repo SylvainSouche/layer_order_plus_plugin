@@ -1,6 +1,6 @@
 """Replay docs/TEST_SCENARIO.md on the real test project, headless.
 
-The manual plan states, for each step, what Plus, QGIS's Layer Order panel
+The manual plan states, for each step, what ALO, QGIS's Layer Order panel
 and the map must show. This check performs the same steps through the same
 entry points the UI uses (View intents, native-panel row moves, layer-tree
 API) and asserts those expectations — so the documented results are
@@ -19,14 +19,14 @@ from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QListView
 
-from layer_order_plus_qgis4.controller import LayerOrderController
-from layer_order_plus_qgis4.model import GroupNode, LayerNode, LayerOrderModel
-from layer_order_plus_qgis4.reconcile import (
+from advanced_layer_order.controller import LayerOrderController
+from advanced_layer_order.model import GroupNode, LayerNode, LayerOrderModel
+from advanced_layer_order.reconcile import (
     reconcile_tree,  # noqa: F401  (native drags go through the Controller)
 )
-from layer_order_plus_qgis4.tree_model import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
-from layer_order_plus_qgis4.view import LayerOrderView
-from layer_order_plus_qgis4.view_controller import ViewController
+from advanced_layer_order.tree_model import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
+from advanced_layer_order.view import LayerOrderView
+from advanced_layer_order.view_controller import ViewController
 
 DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 sys.path.insert(0, DATA)
@@ -68,7 +68,7 @@ def name_of(layer_id):
     return lyr.name() if lyr else layer_id
 
 
-def plus():
+def alo():
     def fmt(nodes):
         return ", ".join(name_of(n.id) if isinstance(n, LayerNode) else f"{n.name}[{fmt(n.children)}]"
                          for n in nodes)
@@ -94,10 +94,10 @@ def centre():
     return NAME_OF.get(QColor(job.renderedImage().pixel(int(p.x()), int(p.y()))).name(), "white")
 
 
-def expect(step, plus_tree=None, native=None, top=None):
+def expect(step, alo_tree=None, native=None, top=None):
     pump(80)
-    if plus_tree is not None:
-        check(plus() == plus_tree, f"{step} Plus: {plus()!r} != {plus_tree!r}")
+    if alo_tree is not None:
+        check(alo() == alo_tree, f"{step} ALO: {alo()!r} != {alo_tree!r}")
     if native is not None:
         check(native_rows() == native, f"{step} Native: {native_rows()!r} != {native!r}")
     if top is not None:
@@ -153,7 +153,7 @@ view.chk_control.click()
 expect("1.3", native="A B C D E", top="A")
 root.setHasCustomLayerOrder(True)                     # 1.4: native checkbox
 expect("1.4", native="A B C D E", top="A")
-check(model.get_control_enabled(), "1.4 Plus follows")
+check(model.get_control_enabled(), "1.4 ALO follows")
 e_node = root.findLayer(lid("E"))                     # 1.5: Layers panel, E to the top
 root.insertChildNode(0, e_node.clone())
 root.removeChildNode(e_node)
@@ -182,7 +182,7 @@ for step, args, tree, order, top in [
 # Regression: opening a project must not inherit the previous project's
 # groups (its layers' removal used to be saved into the new project)
 open_project()
-check(plus() == "A, B, C, D, E", f"previous project's groups leaked: {plus()!r}")
+check(alo() == "A, B, C, D, E", f"previous project's groups leaked: {alo()!r}")
 baseline()
 for step, ids, up, tree, order, top in [
     ("4.1", ["B"], True, "ABCD[AB[B, A], CD[C, D]], E", "B A C D E", "B"),
@@ -218,7 +218,7 @@ expect("6.1", top="A")
 check(not root.findLayer(lid("C")).itemVisibilityChecked(), "6.1 C unticked in Layers panel")
 root.findLayer(lid("C")).setItemVisibilityChecked(True)
 expect("6.2", top="A")
-check(model.find_item(lid("C")).visible, "6.2 Plus follows")
+check(model.find_item(lid("C")).visible, "6.2 ALO follows")
 view.check_requested.emit(gid("AB"), False)
 expect("6.3", top="C")
 view.check_requested.emit(gid("AB"), True)
@@ -229,7 +229,7 @@ qg.addChildNode(d_node.clone())
 root.removeChildNode(d_node)
 qg.setItemVisibilityChecked(False)
 pump()
-check(model.find_item(lid("D")).visible is False, "6.5 D shown unticked in Plus")
+check(model.find_item(lid("D")).visible is False, "6.5 D shown unticked in ALO")
 view.check_requested.emit(lid("D"), True)
 pump()
 check(qg.itemVisibilityChecked() and model.find_item(lid("D")).visible, "6.6 QG ticked again")
@@ -243,7 +243,7 @@ c_node.parent().insertLayer(c_node.parent().children().index(c_node), f_layer)
 expect("7.1", "ABCD[AB[A, B], CD[F, C, D]], E", "A B F C D E", "A")
 f_layer.setName("F2")
 expect("7.2", "ABCD[AB[A, B], CD[F2, C, D]], E", "A B F2 C D E")
-view.move_by_one_requested.emit([lid("B")], True)     # a Plus edit after F was added
+view.move_by_one_requested.emit([lid("B")], True)     # an ALO edit after F was added
 expect("7.3", "ABCD[AB[B, A], CD[F2, C, D]], E", "B A F2 C D E", "B")
 vc.undo_stack.undo()                                  # undoes the move only
 expect("7.3", "ABCD[AB[A, B], CD[F2, C, D]], E", "A B F2 C D E", "A")

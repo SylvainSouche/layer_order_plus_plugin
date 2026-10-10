@@ -33,7 +33,7 @@ DROP_END = "end"        # empty area below the last row → bottom of the top le
 ROLE_ID = Qt.ItemDataRole.UserRole + 1
 ROLE_TYPE = Qt.ItemDataRole.UserRole + 2
 
-MIME_IDS = "application/x-layer-order-plus-ids"
+MIME_IDS = "application/x-advanced-layer-order-ids"
 
 _FLAGS = (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable
           | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)

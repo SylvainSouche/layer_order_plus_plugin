@@ -1,4 +1,4 @@
-# Releasing Layer Order Plus
+# Releasing Advanced Layer Order
 
 ## Every release
 
@@ -11,7 +11,7 @@
 
    ```bash
    make lint && make test && make qgis-test && make check
-   make zip        # dist/layer_order_plus_qgis4-<VERSION>.zip
+   make zip        # dist/advanced_layer_order-<VERSION>.zip
    ```
 
 3. Run the manual acceptance test ([`TEST_SCENARIO.md`](TEST_SCENARIO.md))
@@ -23,27 +23,24 @@
    is available once the upload's security scan passes; a **new** plugin
    needs staff approval first.
 
-## First publication: where the plugin lives
+## Identity
 
-Samuel Kultz agreed to the fork being maintained by Sylvain Souche.
-Before the first upload, choose between taking over his entry and
-creating a new one. The choice is permanent: on plugins.qgis.org and in
-QGIS, a plugin's identity is the **folder name inside the zip**.
+Advanced Layer Order is published as a **new plugin** on
+plugins.qgis.org: the QGIS 4 continuation of *Layer Order Plus* by Samuel
+Kultz, with his agreement. His entry (`layer_order_plus`, QGIS 3) stays
+his and untouched.
 
-| | Take over `layer_order_plus` | New plugin |
-|---|---|---|
-| What Samuel does | Adds your OSGeo user as an owner of [his entry](https://plugins.qgis.org/plugins/layer_order_plus/) (plugin page → manage owners) | Nothing |
-| Folder in the zip | must be `layer_order_plus`: `make zip PLUGIN_FOLDER=layer_order_plus` (and set it in the Makefile) | your choice, e.g. `layer_order_plus_qgis4`: set `PLUGIN_FOLDER` in the Makefile |
-| `name=` in `metadata.txt` | `Layer Order Plus` (unchanged) | a distinct name, e.g. `Layer Order Plus (QGIS 4)` |
-| QGIS 3 users | keep 1.0.0: this version needs QGIS 4.0+ | keep using Samuel's entry |
-| QGIS 4 users | see one plugin, with the history and download count | see a new plugin; Samuel's 1.0.0 doesn't install on QGIS 4 anyway |
-| Approval | new version of an existing plugin | staff approval of a new plugin |
+| | |
+|---|---|
+| Plugin name (`name=` in `metadata.txt`) | Advanced Layer Order |
+| Folder in the zip (the plugin's permanent identity) | `advanced_layer_order` (`PLUGIN_FOLDER` in the Makefile) |
+| Repository | https://github.com/SylvainSouche/qgis_advanced_layer_order |
 
-Either way, check `metadata.txt` (`repository`, `tracker`, `homepage`
-point to your fork; `author`, `email`), then rebuild the zip and rerun
-`make check`.
+The first upload needs staff approval. Never change the folder name
+afterwards: QGIS and plugins.qgis.org would see a different plugin.
 
-**Your own installed copy** sits in a folder named
-`layer_order_plus_plugin` (the name earlier builds used). Uninstall it
-once before installing a zip with a different folder name, or QGIS will
-show two plugins.
+**Installed copies from before the rename** live in a folder named
+`layer_order_plus_plugin`: uninstall that once before installing
+Advanced Layer Order, or QGIS shows two plugins. Projects saved with it
+keep their groups (their tree is read from the old `BetterLayerOrder`
+project key; it is saved under `AdvancedLayerOrder` from then on).
