@@ -8,7 +8,9 @@ docs/TEST_SCENARIO.md.
 """
 import math
 import os
+import shutil
 import sys
+import tempfile
 
 from harness import FakeIface, check, finish, pump
 from qgis.core import QgsMapRendererParallelJob, QgsMapSettings, QgsProject, QgsRectangle, QgsVectorLayer
@@ -21,6 +23,10 @@ from advanced_layer_order.model import LayerOrderModel
 DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 sys.path.insert(0, DATA)
 import make_test_project as spec  # noqa: E402
+
+WORK = tempfile.mkdtemp()
+for f in ("test.qgz", "test_layers.gpkg"):
+    shutil.copy(os.path.join(DATA, f), WORK)       # never touch the committed data
 
 EXTENT = QgsRectangle(-8500, -8000, 16500, 8000)
 SIZE = QSize(1000, 640)
@@ -49,7 +55,7 @@ def outer_point(angle, distance=6000.0):
     return distance * math.cos(a), distance * math.sin(a)
 
 
-QgsProject.instance().read(os.path.join(DATA, "test.qgz"))
+QgsProject.instance().read(os.path.join(WORK, "test.qgz"))
 proj = QgsProject.instance()
 by_name = {lyr.name(): lyr for lyr in proj.mapLayers().values()}
 check(sorted(by_name) == list("ABCDE"), f"project layers {sorted(by_name)}")
@@ -70,7 +76,7 @@ for order in ("ABCDE", "EDCBA", "CEADB", "BADCE"):
         image.save(os.path.join(snapshots, f"test-map-{order}.png"))
 
 # Layer F (to be added during the tests) overlaps C
-f_layer = QgsVectorLayer(f"{os.path.join(DATA, 'test_layers.gpkg')}|layername=F", "F", "ogr")
+f_layer = QgsVectorLayer(f"{os.path.join(WORK, 'test_layers.gpkg')}|layername=F", "F", "ogr")
 check(f_layer.isValid() and f_layer.renderer() is not None, "layer F with its stored style")
 f_colour = spec.EXTRA["F"][0]
 for order, expected in (("ABFCDE", f_colour), ("ABCFDE", spec.LAYERS["C"][0])):
