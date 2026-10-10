@@ -75,7 +75,7 @@ class ViewController(QObject):
         v.expand_requested.connect(self._on_expand)
         v.check_requested.connect(self._on_check)
         v.drop_requested.connect(self._on_drop)
-        v.undo_requested.connect(lambda undo: self.undo_stack.undo() if undo else self.undo_stack.redo())
+        v.undo_requested.connect(self._on_undo_requested)   # a method, not a lambda: see LayerOrderView
         stack = self.undo_stack
         for sig in (stack.canUndoChanged, stack.canRedoChanged, stack.undoTextChanged, stack.redoTextChanged):
             sig.connect(self._render_undo_state)
@@ -220,6 +220,12 @@ class ViewController(QObject):
         with self._user_edit("Move to top" if to_top else "Move to bottom"):
             self._model.move_items_to_boundary(item_ids, to_top=to_top)
         self._view.render_selection(item_ids)
+
+    def _on_undo_requested(self, undo: bool) -> None:
+        if undo:
+            self.undo_stack.undo()
+        else:
+            self.undo_stack.redo()
 
     def _on_move_by_one(self, item_ids: list, up: bool) -> None:
         if not item_ids:

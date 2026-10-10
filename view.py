@@ -59,6 +59,17 @@ _TREE_TOOLTIP = (
 )
 
 
+class _ReportingCheckBox(QCheckBox):
+    """A checkbox whose click reports the wish instead of toggling: it keeps
+    showing the real state until the ViewController renders the outcome.
+    (A signal, not a closure: a closure capturing the box leaked it.)"""
+
+    toggle_requested = pyqtSignal(bool)
+
+    def nextCheckState(self):
+        self.toggle_requested.emit(not self.isChecked())
+
+
 class LayerOrderView(QDockWidget):
     """Pure UI for Advanced Layer Order. See module docstring for the contract."""
 
@@ -130,17 +141,17 @@ class LayerOrderView(QDockWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lay.addWidget(self.tree)
 
-        self.chk_control = QCheckBox("Control rendering order")
+        self.chk_control = _ReportingCheckBox("Control rendering order")
         self.chk_control.setToolTip(
             "When checked, this panel drives the map draw order (custom layer order). "
             "When unchecked, QGIS uses the default Layers-panel order."
         )
-        self.chk_remove_empty = QCheckBox("Remove empty groups on layer delete")
+        self.chk_remove_empty = _ReportingCheckBox("Remove empty groups on layer delete")
         self.chk_remove_empty.setToolTip(
             "When checked, order groups that become empty after their last layer is "
             "removed are deleted automatically. When unchecked, empty groups are kept."
         )
-        self.chk_verbose = QCheckBox("Verbose logging (AdvancedLayerOrder log tab)")
+        self.chk_verbose = _ReportingCheckBox("Verbose logging (AdvancedLayerOrder log tab)")
         self.chk_verbose.setToolTip(
             "Log every step of drag-drop and sync to the AdvancedLayerOrder tab in "
             "View → Panels → Log Messages. OFF by default."
@@ -149,35 +160,46 @@ class LayerOrderView(QDockWidget):
             lay.addWidget(c)
 
     def _connect_signals(self):
-        self.btn_add_group.clicked.connect(
-            lambda: self.create_group_requested.emit(self.selected_ids()))
+        # Bound methods and signals only: PyQt keeps a lambda or closure
+        # that captures self alive from C++, where the GC can't see it, so
+        # the panel was never freed on unload (tests/qgis/check_no_leaks.py).
+        self.btn_add_group.clicked.connect(self._request_create_group)
         self.btn_rename_group.clicked.connect(self._request_rename)
-        self.btn_del_group.clicked.connect(
-            lambda: self.delete_groups_requested.emit(self.selected_group_ids()))
-        self.btn_move_up.clicked.connect(lambda: self._request_move_by_one(True))
-        self.btn_move_down.clicked.connect(lambda: self._request_move_by_one(False))
+        self.btn_del_group.clicked.connect(self._request_delete_groups)
+        self.btn_move_up.clicked.connect(self._request_move_up)
+        self.btn_move_down.clicked.connect(self._request_move_down)
         self.tree.move_intent.connect(self._request_move_by_one)
-        self._report_only(self.chk_control, self.control_toggled)
-        self._report_only(self.chk_remove_empty, self.remove_empty_toggled)
-        self._report_only(self.chk_verbose, self.verbose_toggled)
+        self.chk_control.toggle_requested.connect(self.control_toggled)
+        self.chk_remove_empty.toggle_requested.connect(self.remove_empty_toggled)
+        self.chk_verbose.toggle_requested.connect(self.verbose_toggled)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.selectionModel().selectionChanged.connect(self._update_group_buttons)
-        self.tree.expand_intent.connect(lambda gid, on: self.expand_requested.emit([gid], on))
-        self.btn_undo.clicked.connect(lambda: self.undo_requested.emit(True))
-        self.btn_redo.clicked.connect(lambda: self.undo_requested.emit(False))
+        self.tree.expand_intent.connect(self._request_expand)
+        self.btn_undo.clicked.connect(self._request_undo)
+        self.btn_redo.clicked.connect(self._request_redo)
         self.item_model.drop_intent.connect(self.drop_requested)
         self.item_model.check_intent.connect(self.check_requested)
 
-    @staticmethod
-    def _report_only(box: QCheckBox, intent):
-        """A click reports the wish; the box keeps showing the real state
-        until the ViewController renders the outcome."""
-        def on_clicked(checked):
-            box.blockSignals(True)
-            box.setChecked(not checked)
-            box.blockSignals(False)
-            intent.emit(checked)
-        box.clicked.connect(on_clicked)
+    def _request_create_group(self):
+        self.create_group_requested.emit(self.selected_ids())
+
+    def _request_delete_groups(self):
+        self.delete_groups_requested.emit(self.selected_group_ids())
+
+    def _request_move_up(self):
+        self._request_move_by_one(True)
+
+    def _request_move_down(self):
+        self._request_move_by_one(False)
+
+    def _request_expand(self, group_id: str, expanded: bool):
+        self.expand_requested.emit([group_id], expanded)
+
+    def _request_undo(self):
+        self.undo_requested.emit(True)
+
+    def _request_redo(self):
+        self.undo_requested.emit(False)
 
     # ==================================================================
     # Selection (presentation state)
