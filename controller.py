@@ -129,9 +129,9 @@ class LayerOrderController(QObject):
         (the Model mirrors effective visibility). The Model follows through
         the visibilityChanged signal.
         """
-        root = QgsProject.instance().layerTreeRoot()
+        nodes = self._layer_tree_nodes()
         for lid in layer_ids:
-            node = root.findLayer(lid)
+            node = nodes.get(lid)
             if node is None:
                 continue
             if visible:
@@ -199,11 +199,8 @@ class LayerOrderController(QObject):
     def _sync_layer_set(self) -> None:
         """Make the Model's layers exactly QGIS's layers, with QGIS's names/visibility."""
         model = self._model
-        root = QgsProject.instance().layerTreeRoot()
         qgis_layers = {lyr.id(): lyr for lyr in QgsProject.instance().mapLayers().values()}
-        for lid in list(model.iter_layer_ids()):
-            if lid not in qgis_layers:
-                model.remove_layer(lid)
+        model.remove_layers([lid for lid in model.iter_layer_ids() if lid not in qgis_layers])
         if not any(True for _ in model.iter_layer_ids()):
             # Fresh document: take QGIS's draw order as is
             for lyr in self._qgis_draw_order():
@@ -211,9 +208,10 @@ class LayerOrderController(QObject):
         else:
             known = set(model.iter_layer_ids())
             self._place_layers([lid for lid in self._layer_panel_order() if lid not in known])
+        nodes = self._layer_tree_nodes()
         for lid, lyr in qgis_layers.items():
             model.rename_layer(lid, lyr.name())
-            node = root.findLayer(lid)
+            node = nodes.get(lid)
             model.set_visibility(lid, node.isVisible() if node is not None else True)
 
     @staticmethod
@@ -227,6 +225,12 @@ class LayerOrderController(QObject):
     def _layer_panel_order() -> list:
         """Layer ids in Layers-panel order (top first), ignoring any custom order."""
         return [n.layerId() for n in QgsProject.instance().layerTreeRoot().findLayers()]
+
+    @staticmethod
+    def _layer_tree_nodes() -> dict:
+        """{layer id: Layers-panel node}. One walk, where findLayer() walks
+        the tree for every lookup."""
+        return {n.layerId(): n for n in QgsProject.instance().layerTreeRoot().findLayers()}
 
     # ==================================================================
     # Layers added / removed / renamed / visibility
@@ -244,35 +248,53 @@ class LayerOrderController(QObject):
 
     def _place_layers(self, layer_ids: list) -> None:
         """Insert layers next to their nearest Layers-panel neighbour already
-        in the Model (before the one below it, else after the one above)."""
+        in the Model (before the one below it, else after the one above).
+        Layers missing from the Layers panel count as being at its bottom.
+        One sweep of the panel order and one Model splice: O(n)."""
         proj = QgsProject.instance()
-        root = proj.layerTreeRoot()
-        order = self._layer_panel_order()
         known = set(self._model.iter_layer_ids())
-        for lid in layer_ids:
-            lyr = proj.mapLayer(lid)
-            if lyr is None or lid in known:
-                continue
-            pos = order.index(lid) if lid in order else len(order)
-            below = next((x for x in order[pos + 1:] if x in known), None)
-            above = next((x for x in reversed(order[:pos]) if x in known), None)
-            node = root.findLayer(lid)
-            visible = node.isVisible() if node is not None else True
-            if below is not None:
-                self._model.add_layer_beside(lid, lyr.name(), visible, below, after=False)
-            elif above is not None:
-                self._model.add_layer_beside(lid, lyr.name(), visible, above, after=True)
+        new = [lid for lid in dict.fromkeys(layer_ids)
+               if lid not in known and proj.mapLayer(lid) is not None]
+        if not new:
+            return
+        targets = set(new)
+        order = [lid for lid in self._layer_panel_order() if lid in known or lid in targets]
+        in_panel = set(order)
+        order += [lid for lid in new if lid not in in_panel]
+        nodes = self._layer_tree_nodes()
+
+        def entry(lid, anchor, after):
+            node = nodes.get(lid)
+            return (lid, proj.mapLayer(lid).name(),
+                    node.isVisible() if node is not None else True, anchor, after)
+
+        # Bottom-up: each new layer goes before the nearest known layer below
+        placements, below, trailing = [], None, []
+        for lid in reversed(order):
+            if lid in known:
+                below = lid
+            elif below is not None:
+                placements.append(entry(lid, below, False))
             else:
-                self._model.add_layer(lid, lyr.name(), visible)
-            known.add(lid)
+                trailing.append(lid)
+        placements.reverse()
+        # Below every known layer: after the lowest one, in panel order
+        above = next((lid for lid in reversed(order) if lid in known), None)
+        if above is not None:
+            placements += [entry(lid, above, True) for lid in reversed(trailing)]
+            self._model.add_layers_beside(placements)
+        else:
+            with self._model.block_notifications():     # nothing known: append
+                for lid in reversed(trailing):
+                    _, name, visible, _, _ = entry(lid, None, True)
+                    self._model.add_layer(lid, name, visible)
 
     def _on_layers_removed(self, layer_ids) -> None:
         if self._loading:
             return
         removed = set(layer_ids or [])
         self._pending_layers = [lid for lid in self._pending_layers if lid not in removed]
-        for lid in removed:
-            self._model.remove_layer(lid)
+        self._model.remove_layers(removed)
 
     def _on_tree_name_changed(self, node, name) -> None:
         if QgsLayerTree.isLayer(node):
