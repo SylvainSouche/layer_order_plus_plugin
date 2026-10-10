@@ -1,10 +1,10 @@
-# Layer Order Plus (QGIS 4 fork) — build
+# Advanced Layer Order (QGIS 4 fork) — build
 # Single source of truth: ./VERSION
 # Detailed history: VERSION.md; macro versions: metadata.txt changelog
 
 PLUGIN_DIR   := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PLUGIN_DIR   := $(PLUGIN_DIR:/=)
-PLUGIN_NAME  := layer_order_plus_qgis4
+PLUGIN_NAME  := advanced_layer_order
 VERSION_FILE := $(PLUGIN_DIR)/VERSION
 VERSION      := $(shell tr -d '[:space:]' < "$(VERSION_FILE)")
 # Zip lands in ./dist
@@ -12,14 +12,14 @@ DIST_DIR     := $(PLUGIN_DIR)/dist
 ZIP_NAME     := $(PLUGIN_NAME)-$(VERSION).zip
 ZIP_PATH     := $(DIST_DIR)/$(ZIP_NAME)
 
-.PHONY: all zip sync clean show-version help check test lint qgis-test
+.PHONY: all zip sync clean show-version help check test lint qgis-test test-data
 
 all: zip
 
 help:
 	@echo "VERSION (from ./VERSION) = $(VERSION)"
 	@echo "Output zip               = $(ZIP_PATH)"
-	@echo "Targets: zip sync clean show-version check lint test qgis-test"
+	@echo "Targets: zip sync clean show-version check lint test qgis-test test-data"
 
 show-version:
 	@echo $(VERSION)
@@ -50,9 +50,13 @@ lint:
 qgis-test:
 	@bash "$(PLUGIN_DIR)/scripts/run_qgis_checks.sh"
 
+# Regenerate the manual-test project (tests/data/test.qgz + test_layers.gpkg)
+test-data:
+	@bash "$(PLUGIN_DIR)/scripts/run_qgis_checks.sh" --script "$(PLUGIN_DIR)/tests/data/make_test_project.py"
+
 # The plugin folder name inside the zip is the plugin's identity in QGIS
 # (and on plugins.qgis.org): never derive it from the checkout folder.
-PLUGIN_FOLDER := layer_order_plus_plugin
+PLUGIN_FOLDER := advanced_layer_order
 # Runtime files only (plus the user guide and history); no dev files,
 # no hidden files, no executable bits.
 RUNTIME_FILES := $(sort $(wildcard $(PLUGIN_DIR)/*.py)) \

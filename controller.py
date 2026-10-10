@@ -1,4 +1,4 @@
-"""Layer Order Plus — Controller: QGIS ↔ Model, nothing else.
+"""Advanced Layer Order — Controller: QGIS ↔ Model, nothing else.
 
 The Controller is the only object that talks to QGIS. It never sees the
 View or the ViewController.
@@ -39,9 +39,10 @@ from .model import (
 )
 from .reconcile import reconcile_tree
 
-log = logging.getLogger("LayerOrderPlus.controller")
+log = logging.getLogger("AdvancedLayerOrder.controller")
 
-ENTRY_SCOPE = "BetterLayerOrder"      # historical project-entry scope, kept for compatibility
+ENTRY_SCOPE = "AdvancedLayerOrder"
+LEGACY_SCOPE = "BetterLayerOrder"     # Layer Order Plus and early fork builds: read, never written
 ENTRY_TREE = "tree_json"
 ENTRY_REMOVE_EMPTY = "removeEmptyGroups"
 
@@ -92,6 +93,7 @@ class LayerOrderController(QObject):
         return [
             (proj.layersAdded, self._on_layers_added),
             (proj.layersWillBeRemoved, self._on_layers_removed),
+            (proj.aboutToBeCleared, self._on_project_about_to_be_cleared),
             (proj.cleared, self._on_project_cleared),
             (self._iface.projectRead, self.load_project),
             (self._iface.newProjectCreated, self.load_project),
@@ -134,17 +136,25 @@ class LayerOrderController(QObject):
                 node.setItemVisibilityChecked(False)
 
     def set_control_enabled(self, enabled: bool) -> None:
-        """Let Plus drive (or stop driving) the rendering order."""
+        """Let ALO drive (or stop driving) the rendering order."""
         QgsProject.instance().layerTreeRoot().setHasCustomLayerOrder(bool(enabled))
         QgsProject.instance().setDirty(True)
 
     # ==================================================================
     # Project lifecycle
     # ==================================================================
-    def _on_project_cleared(self) -> None:
+    def _on_project_about_to_be_cleared(self) -> None:
+        """Closing / replacing the project: QGIS removes all its layers next.
+
+        Those removals must not be mirrored: the Model would be edited and
+        the leftover tree saved into the project being opened, which then
+        inherited the previous project's groups.
+        """
         self._apply_timer.stop()
         self._pending_layers.clear()
         self._loading = True
+
+    def _on_project_cleared(self) -> None:
         try:
             self._model.clear()
         finally:
@@ -164,8 +174,9 @@ class LayerOrderController(QObject):
         self._pending_layers.clear()
         self._loading = True
         try:
-            raw = proj.readEntry(ENTRY_SCOPE, ENTRY_TREE, "")[0] or ""
-            remove_empty, ok = proj.readBoolEntry(ENTRY_SCOPE, ENTRY_REMOVE_EMPTY, True)
+            scope = ENTRY_SCOPE if proj.readEntry(ENTRY_SCOPE, ENTRY_TREE, "")[0] else LEGACY_SCOPE
+            raw = proj.readEntry(scope, ENTRY_TREE, "")[0] or ""
+            remove_empty, ok = proj.readBoolEntry(scope, ENTRY_REMOVE_EMPTY, True)
             with model.block_notifications():
                 model.set_remove_empty_groups(remove_empty if ok else True)
                 model.set_control_enabled(root.hasCustomLayerOrder())
@@ -277,7 +288,7 @@ class LayerOrderController(QObject):
         if self._applying or self._loading:
             return  # our own apply / the load refreshes when it is done
         if enabled:
-            # Plus takes over: push its order (QGIS's may be stale)
+            # ALO takes over: push its order (QGIS's may be stale)
             self._apply_custom_order()
         self._refresh_native_panel()
 
@@ -301,7 +312,7 @@ class LayerOrderController(QObject):
             self._applying = False
 
     def _on_custom_order_changed(self) -> None:
-        """Custom order changed outside Plus → reconcile, synchronously.
+        """Custom order changed outside ALO → reconcile, synchronously.
 
         The stock Layer Order panel applies a drag in two steps: it inserts
         the layer at its new row (the layer is then listed twice), then
@@ -314,7 +325,7 @@ class LayerOrderController(QObject):
         * the next clean state completes the drag: reconcile with that
           exact hint.
 
-        Skipped for our own writes, while loading, and while a Plus change
+        Skipped for our own writes, while loading, and while an ALO change
         is waiting to be applied (QGIS's order is then stale).
         """
         if self._applying or self._loading:
@@ -334,7 +345,7 @@ class LayerOrderController(QObject):
         new_root = reconcile_tree(self._model.get_root(), qgis_order, dragged)
         if new_root is None:
             # Not a pure reorder (layers being added/removed): those paths handle it
-            log.debug("reconcile skipped: QGIS order is not a permutation of Plus layers")
+            log.debug("reconcile skipped: QGIS order is not a permutation of ALO layers")
             return
         log.info("reconciled with the QGIS order (dragged: %s)", sorted(dragged))
         self._model.replace_root(new_root)

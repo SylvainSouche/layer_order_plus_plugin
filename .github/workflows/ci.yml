@@ -6,8 +6,13 @@ on:
 
 jobs:
   check:
-    name: Plugin checks
+    name: Plugin checks (${{ matrix.qt }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # PyQt6 = QGIS 4.x, PyQt5 = QGIS 3.40 / 3.44
+        qt: [PyQt6, PyQt5]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +30,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install PyQt6 pytest ruff
+          pip install ${{ matrix.qt }} pytest ruff
 
       - name: Lint
         run: ruff check .
@@ -36,6 +41,7 @@ jobs:
       - name: Run unit tests
         env:
           QT_QPA_PLATFORM: offscreen
+          QT_API: ${{ matrix.qt }}
         run: make test
 
       - name: Build versioned zip
@@ -43,11 +49,11 @@ jobs:
           make show-version
           make zip
           VERSION=$(tr -d '[:space:]' < VERSION)
-          test -f "dist/layer_order_plus_qgis4-${VERSION}.zip"
+          test -f "dist/advanced_layer_order-${VERSION}.zip"
 
       - name: Upload plugin zip
         uses: actions/upload-artifact@v4
         with:
-          name: layer_order_plus_qgis4-zip
-          path: dist/layer_order_plus_qgis4-*.zip
+          name: advanced_layer_order-zip-${{ matrix.qt }}
+          path: dist/advanced_layer_order-*.zip
           if-no-files-found: error

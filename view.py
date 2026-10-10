@@ -1,4 +1,4 @@
-"""Layer Order Plus — View (QDockWidget): renders, and reports intents.
+"""Advanced Layer Order — View (QDockWidget): renders, and reports intents.
 
 Contract
 --------
@@ -17,6 +17,7 @@ Parts: ``LayerOrderItemModel`` (tree_model.py) presents the rendered tree
 and turns drops / checkbox clicks into intents; ``LayerOrderTree``
 (tree_view.py) displays it and reports expand/collapse.
 """
+from __future__ import annotations
 
 from qgis.PyQt.QtCore import QItemSelectionModel, QSize, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
@@ -51,7 +52,7 @@ _TREE_TOOLTIP = (
 
 
 class LayerOrderView(QDockWidget):
-    """Pure UI for Layer Order Plus. See module docstring for the contract."""
+    """Pure UI for Advanced Layer Order. See module docstring for the contract."""
 
     # ==================================================================
     # Intents (ViewController listens)
@@ -69,9 +70,9 @@ class LayerOrderView(QDockWidget):
     verbose_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
-        super().__init__("Layer Order Plus", parent)
+        super().__init__("Advanced Layer Order", parent)
         # Lets QGIS save and restore the dock's place and visibility
-        self.setObjectName("LayerOrderPlusDock")
+        self.setObjectName("AdvancedLayerOrderDock")
         self.item_model = LayerOrderItemModel(self)
         self._build_ui()
         self._connect_signals()
@@ -124,9 +125,9 @@ class LayerOrderView(QDockWidget):
             "When checked, order groups that become empty after their last layer is "
             "removed are deleted automatically. When unchecked, empty groups are kept."
         )
-        self.chk_verbose = QCheckBox("Verbose logging (LayerOrderPlus log tab)")
+        self.chk_verbose = QCheckBox("Verbose logging (AdvancedLayerOrder log tab)")
         self.chk_verbose.setToolTip(
-            "Log every step of drag-drop and sync to the LayerOrderPlus tab in "
+            "Log every step of drag-drop and sync to the AdvancedLayerOrder tab in "
             "View → Panels → Log Messages. OFF by default."
         )
         for c in (self.chk_control, self.chk_remove_empty, self.chk_verbose):

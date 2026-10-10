@@ -9,7 +9,7 @@ from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import QDockWidget
 
 open_test_project()
-package = importlib.import_module("layer_order_plus_qgis4")
+package = importlib.import_module("advanced_layer_order")
 iface = FakeIface()
 edit_menu = iface.mw.menuBar().actions()[0].menu()
 for _ in range(2):

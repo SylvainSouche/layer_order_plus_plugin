@@ -1,4 +1,4 @@
-"""Layer Order Plus — ViewController: View intents → Model, Model events → View.
+"""Advanced Layer Order — ViewController: View intents → Model, Model events → View.
 
 The ViewController is the only object that talks to both the View and the
 Model, and it does exactly two things:
@@ -17,13 +17,16 @@ Model, and it does exactly two things:
 It never touches QGIS and never reads state back from the View: intents
 carry their data.
 """
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from contextlib import contextmanager
 
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import QIcon, QUndoStack
+from qgis.PyQt.QtGui import QIcon
 
+from .compat import QUndoStack
 from .model import (
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_RENAMED,
@@ -44,7 +47,7 @@ from .tree_model import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
 from .undo import TreeStateCommand
 from .view import LayerOrderView
 
-log = logging.getLogger("LayerOrderPlus.view_controller")
+log = logging.getLogger("AdvancedLayerOrder.view_controller")
 
 
 class ViewController(QObject):

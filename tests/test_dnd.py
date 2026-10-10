@@ -7,11 +7,11 @@ check that the View never acts on its own input.
 import types
 
 import pytest
-from PyQt6.QtCore import QMimeData, QModelIndex, QPoint, Qt
-from PyQt6.QtTest import QTest
+from qgis.PyQt.QtCore import QMimeData, QModelIndex, QPoint, Qt
+from qgis.PyQt.QtTest import QTest
 
-from layer_order_plus_qgis4.model import GroupNode, LayerNode, LayerOrderModel
-from layer_order_plus_qgis4.tree_model import (
+from advanced_layer_order.model import GroupNode, LayerNode, LayerOrderModel
+from advanced_layer_order.tree_model import (
     DROP_ABOVE,
     DROP_BELOW,
     DROP_END,
@@ -62,8 +62,8 @@ def _expanded(view, group_id):
 
 @pytest.fixture
 def mvc(qapp):
-    from layer_order_plus_qgis4.view import LayerOrderView
-    from layer_order_plus_qgis4.view_controller import ViewController
+    from advanced_layer_order.view import LayerOrderView
+    from advanced_layer_order.view_controller import ViewController
 
     view = LayerOrderView()
     model = LayerOrderModel()
@@ -322,14 +322,17 @@ def _show(mvc):
 
 
 def test_checkbox_click_does_not_toggle_item(mvc):
-    from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
+    from qgis.PyQt.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
     mvc.load(["A", "B"])
     _show(mvc)
     tree, index = mvc.view.tree, mvc.view.item_model.index_of("A")
     seen = []
     mvc.view.item_model.check_intent.connect(lambda i, on: seen.append((i, on)))
-    opt = QStyleOptionViewItem()
-    tree.initViewItemOption(opt)
+    if hasattr(tree, "initViewItemOption"):            # Qt 6
+        opt = QStyleOptionViewItem()
+        tree.initViewItemOption(opt)
+    else:                                               # Qt 5
+        opt = tree.viewOptions()
     QStyledItemDelegate().initStyleOption(opt, index)   # Python-created: protected API allowed
     opt.rect = tree.visualRect(index)
     box = tree.style().subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, tree)

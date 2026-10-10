@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from layer_order_plus_qgis4.icons import (
+from advanced_layer_order.icons import (
     bundled_icon,
     icon_add_group,
     icon_for_layer,

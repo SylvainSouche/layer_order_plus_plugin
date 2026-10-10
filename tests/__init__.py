@@ -1,1 +1,1 @@
-"""Layer Order Plus — test package."""
+"""Advanced Layer Order — test package."""

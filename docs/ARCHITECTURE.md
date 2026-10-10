@@ -1,4 +1,6 @@
-# Layer Order Plus — Architecture
+# Advanced Layer Order — Architecture
+
+*ALO* below stands for Advanced Layer Order.
 
 One rule: **each piece does one thing, and data flows one way.**
 The View shows the Model and reports what the user wants; it never acts on it.
@@ -72,10 +74,10 @@ step is recorded.
 
 ## Sync with QGIS
 
-* **Plus → QGIS**: `order_changed` → `setCustomLayerOrder` (50 ms debounce).
+* **ALO → QGIS**: `order_changed` → `setCustomLayerOrder` (50 ms debounce).
   While writing, `_applying` is set; QGIS echoes it synchronously and the
   Controller ignores its own echoes.
-* **QGIS → Plus**: layer added (placed next to its Layers-panel neighbour,
+* **QGIS → ALO**: layer added (placed next to its Layers-panel neighbour,
   one loop turn later because QGIS creates the tree node after
   `layersAdded`), removed, renamed, visibility, `hasCustomLayerOrder`.
 * **Stock Layer Order panel display**: that panel re-reads the order only on
@@ -135,25 +137,38 @@ selected blocks move together and nothing ever leaves its group.
 
 ## Tests
 
-* `make test` — PyQt6 + pytest, no QGIS needed: Model, reconcile
+* `make test` — PyQt6 (or `QT_API=pyqt5` for PyQt5) + pytest, no QGIS needed: Model, reconcile
   (including an exhaustive "only the dragged layer changes group"
   invariant), scenarios, and `test_dnd.py`, which drives the real View +
   ViewController + Model and asserts the View never acts on its own input.
-* `make qgis-test` — `tests/qgis/check_*.py` inside a real headless QGIS
-  (uses `$QGIS_APP` or the newest `/Applications/QGIS*.app`): the full
+* `make qgis-test` — `tests/qgis/check_*.py` inside real headless QGIS,
+  under **every** install found (`/Applications/QGIS*.app`, MacPorts
+  `/Applications/MacPorts/QGIS*.app`, or `$QGIS_APPS`): the full
   user scenario, QGIS Layer Order panel drags with the event loop running
   between its two steps, the native panel's display after toggling
-  control, a reopened project staying unmodified, and plugin load/unload
-  + keyboard undo.
+  control, a reopened project staying unmodified, plugin load/unload
+  + keyboard undo, the manual-test data really showing the order on the
+  map, and a headless replay of `docs/TEST_SCENARIO.md` sections 1–7
+  asserting each step's ALO / Native / Map expectations.
+* `make test-data` — regenerates the manual-test project
+  (`tests/data/make_test_project.py`).
 * `make lint` — ruff.
+
+## QGIS 3 and QGIS 4
+
+One package runs on QGIS 3.40 / 3.44 (Qt 5.15, PyQt5) and QGIS 4.x (Qt 6,
+PyQt6). All Qt imports go through `qgis.PyQt`; the two differences it
+doesn't cover — the undo classes' module and a mouse event's position —
+are in `compat.py`. The code stays Python 3.9-compatible (ruff
+`target-version`), the oldest Python a 3.40 packaging may ship.
 
 ## Packaging
 
-`make zip` builds `dist/layer_order_plus_qgis4-<VERSION>.zip` from an
+`make zip` builds `dist/advanced_layer_order-<VERSION>.zip` from an
 explicit whitelist (the `*.py` modules, `metadata.txt`, `LICENSE`,
 `icon.png`, `icons/*.svg`, `README.md`, `VERSION.md`,
 `docs/DOCUMENTATION.md`) staged under the fixed folder
-`layer_order_plus_plugin` — the plugin's identity in QGIS — with plain
+`advanced_layer_order` — the plugin's identity in QGIS — with plain
 644/755 permissions. No dev files, hidden files or scripts, so the
 plugins.qgis.org upload scan (Bandit, detect-secrets, suspicious /
 executable / hidden files) has nothing to flag.

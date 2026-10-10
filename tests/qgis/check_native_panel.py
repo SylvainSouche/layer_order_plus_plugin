@@ -25,7 +25,7 @@ for which in ("plus", "native"):
         pump()
     box.click()
     pump()
-    check(native_rows() == r.plus_order(), f"{which} ON: native {native_rows()} vs Plus {r.plus_order()}")
+    check(native_rows() == r.alo_order(), f"{which} ON: native {native_rows()} vs ALO {r.alo_order()}")
     box.click()
     pump()
     tree = "".join(r.name(lyr.id()) for lyr in root.layerOrder())
