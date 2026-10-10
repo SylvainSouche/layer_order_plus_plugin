@@ -3,8 +3,9 @@
 What the Model owns
 -------------------
 * The ALO document: order groups, their nesting and expanded state, and
-  the draw order of the layers inside them.
-* The document setting ``remove_empty_groups``.
+  the draw order of the layers inside them. Groups are only ever removed
+  by the user: one emptied by layer deletions stays, as in QGIS's Layers
+  panel.
 
 What the Model mirrors (written only by the Controller, from QGIS)
 ------------------------------------------------------------------
@@ -56,10 +57,6 @@ class LayerNode:
     name: str
     visible: bool = True       # mirror of QGIS effective visibility
 
-    @property
-    def is_group(self) -> bool:
-        return False
-
 
 @dataclass
 class GroupNode:
@@ -68,10 +65,6 @@ class GroupNode:
     name: str
     expanded: bool = True
     children: list = field(default_factory=list)
-
-    @property
-    def is_group(self) -> bool:
-        return True
 
 
 Node = Union[GroupNode, LayerNode]   # runtime alias: no `|` (Python 3.9)
@@ -101,14 +94,11 @@ EVENT_LAYER_RENAMED = "layer_renamed"
 EVENT_GROUP_RENAMED = "group_renamed"
 EVENT_VISIBILITY_CHANGED = "visibility_changed"
 EVENT_EXPANDED_CHANGED = "expanded_changed"
-EVENT_SETTING_CHANGED = "setting_changed"     # payload: {"key", "value"}
+EVENT_CONTROL_CHANGED = "control_changed"     # payload: {"enabled"}
 
 # Trailing signal after any structural change: the flattened order may differ.
 # Payload {"resync": True} when it follows a model_loaded (already a full resync).
 EVENT_ORDER_CHANGED = "order_changed"
-
-SETTING_CONTROL_ENABLED = "control_enabled"
-SETTING_REMOVE_EMPTY_GROUPS = "remove_empty_groups"
 
 _STRUCTURAL_EVENTS = frozenset({
     EVENT_LAYER_ADDED, EVENT_LAYER_REMOVED, EVENT_GROUP_CREATED,
@@ -127,14 +117,15 @@ class LayerOrderModel:
 
     def __init__(self) -> None:
         self._root: list[Node] = []
+        # {id: (node, parent, position)}: O(1) lookups. Built lazily by one
+        # walk; any structural mutation drops it (_dirty), so each operation
+        # costs O(n) at most and a run of lookups O(1) each.
+        self._index: dict[str, tuple[Node, GroupNode | None, int]] | None = None
         self._listeners: list[Listener] = []
         self._block_depth = 0
         self._suppressed = False          # something was emitted while blocked
         self._suppressed_structural = False
-        self._settings = {
-            SETTING_CONTROL_ENABLED: False,
-            SETTING_REMOVE_EMPTY_GROUPS: True,
-        }
+        self._control_enabled = False     # mirror of QGIS's hasCustomLayerOrder
 
     # ------------------------------------------------------------------
     # Listeners
@@ -201,28 +192,49 @@ class LayerOrderModel:
                     yield from rec(n.children, n)
         yield from rec(self._root, None)
 
+    def _dirty(self) -> None:
+        """The structure changed: the id index is rebuilt on next lookup."""
+        self._index = None
+
+    def _lookup(self, item_id: str | None) -> tuple[Node | None, GroupNode | None, int | None]:
+        """(node, parent, position in parent); (None, None, None) if unknown."""
+        if self._index is None:
+            index: dict[str, tuple[Node, GroupNode | None, int]] = {}
+
+            def rec(nodes, parent):
+                for i, n in enumerate(nodes):
+                    index[n.id] = (n, parent, i)
+                    if isinstance(n, GroupNode):
+                        rec(n.children, n)
+            rec(self._root, None)
+            self._index = index
+        return self._index.get(item_id, (None, None, None))
+
     def find_item(self, item_id: str) -> Node | None:
-        return next((n for n, _ in self.walk() if n.id == item_id), None)
+        return self._lookup(item_id)[0]
 
     def find_parent(self, item_id: str) -> GroupNode | None:
         """Parent group of `item_id`, or None if top-level (or unknown)."""
-        return next((p for n, p in self.walk() if n.id == item_id), None)
+        return self._lookup(item_id)[1]
 
     def _siblings(self, parent: GroupNode | None) -> list[Node]:
         return parent.children if parent is not None else self._root
 
     def get_index_in_parent(self, item_id: str) -> int | None:
-        siblings = self._siblings(self.find_parent(item_id))
-        return next((i for i, s in enumerate(siblings) if s.id == item_id), None)
+        return self._lookup(item_id)[2]
+
+    def _ancestors(self, item_id: str) -> list[GroupNode]:
+        """Groups containing `item_id`, innermost first."""
+        out = []
+        parent = self.find_parent(item_id)
+        while parent is not None:
+            out.append(parent)
+            parent = self.find_parent(parent.id)
+        return out
 
     def get_depth(self, item_id: str) -> int:
         """1 for top-level, 2 for one level deep, ...; 0 if unknown."""
-        depth = 0
-        node = self.find_item(item_id)
-        while node is not None:
-            depth += 1
-            node = self.find_parent(node.id)
-        return depth
+        return 1 + len(self._ancestors(item_id)) if self.find_item(item_id) else 0
 
     def iter_layer_ids(self) -> Iterator[str]:
         return (n.id for n, _ in self.walk() if isinstance(n, LayerNode))
@@ -266,31 +278,16 @@ class LayerOrderModel:
         return out
 
     # ------------------------------------------------------------------
-    # Settings
+    # Control of the rendering order (mirrored from QGIS)
     # ------------------------------------------------------------------
-    def get_setting(self, key: str):
-        return self._settings[key]
-
-    def set_setting(self, key: str, value) -> None:
-        if key not in self._settings:
-            raise KeyError(key)
-        if self._settings[key] == value:
-            return
-        self._settings[key] = value
-        self._emit(EVENT_SETTING_CHANGED, {"key": key, "value": value})
-
-    # Convenience accessors kept for readability at call sites / tests
-    def get_remove_empty_groups(self) -> bool:
-        return self._settings[SETTING_REMOVE_EMPTY_GROUPS]
-
-    def set_remove_empty_groups(self, value: bool) -> None:
-        self.set_setting(SETTING_REMOVE_EMPTY_GROUPS, bool(value))
-
     def get_control_enabled(self) -> bool:
-        return self._settings[SETTING_CONTROL_ENABLED]
+        return self._control_enabled
 
     def set_control_enabled(self, value: bool) -> None:
-        self.set_setting(SETTING_CONTROL_ENABLED, bool(value))
+        if self._control_enabled == bool(value):
+            return
+        self._control_enabled = bool(value)
+        self._emit(EVENT_CONTROL_CHANGED, {"enabled": self._control_enabled})
 
     # ------------------------------------------------------------------
     # Bulk operations
@@ -314,6 +311,7 @@ class LayerOrderModel:
                 if node is not None:
                     new_root.append(node)
         self._root = new_root
+        self._dirty()
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
     def _build_node(self, raw, seen: set[str]) -> Node | None:
@@ -341,6 +339,7 @@ class LayerOrderModel:
         """Swap in a tree computed elsewhere (e.g. reconcile with QGIS)."""
         log.debug("replace_root")
         self._root = list(nodes)
+        self._dirty()
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
     def restore_structure(self, raw_json: str) -> None:
@@ -370,29 +369,35 @@ class LayerOrderModel:
                 elif n.id in current:
                     out.append(copy.copy(current[n.id]))
             return out
-        snapshot._root = adopt(snapshot._root)
+        root = adopt(snapshot._root)
 
-        # Layers that did not exist when the snapshot was taken
-        present = set(snapshot.iter_layer_ids())
-        for i, lid in enumerate(current_order):
+        # Layers that did not exist when the snapshot was taken go right
+        # after their nearest preceding layer that did (one pass, O(n)).
+        present = set(_flatten_layer_ids(root))
+        after: dict[str | None, list[Node]] = {}
+        prev = None
+        for lid in current_order:
             if lid in present:
-                continue
-            node = copy.copy(current[lid])
-            prev = next((x for x in reversed(current_order[:i]) if x in present), None)
-            if prev is None:
-                snapshot._root.insert(0, node)
+                prev = lid
             else:
-                parent = snapshot.find_parent(prev)
-                siblings = snapshot._siblings(parent)
-                siblings.insert(snapshot.get_index_in_parent(prev) + 1, node)
-            present.add(lid)
+                after.setdefault(prev, []).append(copy.copy(current[lid]))
 
-        self._root = snapshot._root
+        def splice(nodes):
+            out = []
+            for n in nodes:
+                if isinstance(n, GroupNode):
+                    n.children = splice(n.children)
+                out.append(n)
+                out.extend(after.get(n.id, ()))
+            return out
+        self._root = after.get(None, []) + splice(root)
+        self._dirty()
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
     def clear(self) -> None:
         log.debug("clear")
         self._root = []
+        self._dirty()
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
     # ------------------------------------------------------------------
@@ -409,6 +414,7 @@ class LayerOrderModel:
         siblings = self._siblings(parent)
         idx = len(siblings) if index is None else max(0, min(index, len(siblings)))
         siblings.insert(idx, LayerNode(id=layer_id, name=name, visible=visible))
+        self._dirty()
         self._structure_changed(EVENT_LAYER_ADDED, {
             "layer_id": layer_id, "name": name, "visible": visible,
             "parent_id": parent.id if parent else None, "index": idx,
@@ -420,34 +426,75 @@ class LayerOrderModel:
 
         Unknown or missing anchor → top of the top level.
         """
-        parent = self.find_parent(anchor_id) if anchor_id else None
-        idx = self.get_index_in_parent(anchor_id) if anchor_id else None
-        if idx is None:
-            parent, idx = None, 0
-        elif after:
-            idx += 1
-        self.add_layer(layer_id, name, visible, parent.id if parent else None, idx)
+        self.add_layers_beside([(layer_id, name, visible, anchor_id, after)])
+
+    def add_layers_beside(self, layers: list[tuple[str, str, bool, str | None, bool]]) -> None:
+        """Batch add_layer_beside(): `(layer_id, name, visible, anchor_id,
+        after)` tuples, inserted in one pass over the tree (O(n + k)).
+
+        Anchors are layers or groups already in the tree; layers sharing an
+        anchor and side keep the given order.
+        """
+        if not layers:
+            return
+        log.debug("add_layers_beside %d layer(s)", len(layers))
+        before: dict[str, list[Node]] = {}
+        after: dict[str, list[Node]] = {}
+        top: list[Node] = []
+        added: list[str] = []
+        for layer_id, name, visible, anchor_id, is_after in layers:
+            node = LayerNode(id=layer_id, name=name, visible=bool(visible))
+            added.append(layer_id)
+            if anchor_id is None or self.find_item(anchor_id) is None:
+                top.append(node)
+            else:
+                (after if is_after else before).setdefault(anchor_id, []).append(node)
+
+        def splice(nodes):
+            out = []
+            for n in nodes:
+                out.extend(before.get(n.id, ()))
+                if isinstance(n, GroupNode):
+                    n.children = splice(n.children)
+                out.append(n)
+                out.extend(after.get(n.id, ()))
+            return out
+        self._root = top + splice(self._root)
+        self._dirty()
+        for layer_id in added:
+            node, parent, idx = self._lookup(layer_id)
+            self._emit(EVENT_LAYER_ADDED, {
+                "layer_id": layer_id, "name": node.name, "visible": node.visible,
+                "parent_id": parent.id if parent else None, "index": idx,
+            })
+        self._emit(EVENT_ORDER_CHANGED, {})
 
     def remove_layer(self, layer_id: str) -> None:
-        """Remove a layer.
+        """Remove a layer. Its group stays, even if now empty."""
+        self.remove_layers([layer_id])
 
-        With the remove-empty-groups setting, the groups this removal left
-        empty (its group, then that group's parents while they become empty)
-        are removed too. Other empty groups are left alone: an empty group
-        the user created on purpose survives unrelated deletions.
-        """
-        log.debug("remove_layer %s", layer_id)
-        node = self.find_item(layer_id)
-        if not isinstance(node, LayerNode):
+    def remove_layers(self, layer_ids) -> None:
+        """Batch remove_layer(), in one pass over the tree (O(n))."""
+        gone = {lid for lid in layer_ids if isinstance(self.find_item(lid), LayerNode)}
+        if not gone:
             return
-        parent = self.find_parent(layer_id)
-        self._siblings(parent).remove(node)
-        self._emit(EVENT_LAYER_REMOVED, {"layer_id": layer_id})
-        while self.get_remove_empty_groups() and parent is not None and not parent.children:
-            grandparent = self.find_parent(parent.id)
-            self._siblings(grandparent).remove(parent)
-            self._emit(EVENT_GROUP_DELETED, {"group_id": parent.id, "unwrapped_children": []})
-            parent = grandparent
+        log.debug("remove_layers %d layer(s)", len(gone))
+        removed: list[str] = []
+
+        def keep(nodes):
+            out = []
+            for n in nodes:
+                if isinstance(n, GroupNode):
+                    n.children = keep(n.children)
+                elif n.id in gone:
+                    removed.append(n.id)
+                    continue
+                out.append(n)
+            return out
+        self._root = keep(self._root)
+        self._dirty()
+        for layer_id in removed:
+            self._emit(EVENT_LAYER_REMOVED, {"layer_id": layer_id})
         self._emit(EVENT_ORDER_CHANGED, {})
 
     def rename_layer(self, layer_id: str, new_name: str) -> None:
@@ -479,6 +526,7 @@ class LayerOrderModel:
         idx = len(siblings) if index is None else max(0, min(index, len(siblings)))
         gid = new_group_id()
         siblings.insert(idx, GroupNode(id=gid, name=name))
+        self._dirty()
         self._structure_changed(EVENT_GROUP_CREATED, {
             "group_id": gid, "name": name,
             "parent_id": parent.id if parent else None, "index": idx,
@@ -497,6 +545,7 @@ class LayerOrderModel:
         siblings.pop(idx)
         promoted = list(node.children) if unwrap_children else []
         siblings[idx:idx] = promoted
+        self._dirty()
         self._structure_changed(EVENT_GROUP_DELETED, {
             "group_id": group_id,
             "unwrapped_children": [{
@@ -524,19 +573,6 @@ class LayerOrderModel:
     # ------------------------------------------------------------------
     # Moves
     # ------------------------------------------------------------------
-    def move_item(self, item_id: str, new_parent_id: str | None, new_index: int) -> bool:
-        """Index-based form of move_items() for scripting and tests.
-
-        `new_index` is a position in the target parent *before* the item is
-        taken out (i.e. "insert before the node currently at new_index").
-        """
-        parent = self.find_item(new_parent_id) if new_parent_id else None
-        siblings = self._siblings(parent if isinstance(parent, GroupNode) else None)
-        before = siblings[new_index].id if 0 <= new_index < len(siblings) else None
-        if before == item_id:
-            return False
-        return self.move_items([item_id], new_parent_id, before)
-
     def move_items(self, item_ids: list[str], new_parent_id: str | None,
                    before_id: str | None = None) -> bool:
         """Atomically move nodes into `new_parent_id` (None = top level).
@@ -552,35 +588,30 @@ class LayerOrderModel:
         or changes nothing.
         """
         log.debug("move_items ids=%s parent=%s before=%s", item_ids, new_parent_id, before_id)
-        nodes = [n for n in (self.find_item(i) for i in item_ids) if n is not None]
-        movers: list[Node] = []
-        for n in nodes:
-            if any(n is m for m in movers):
-                continue
-            if any(m is not n and self._is_descendant(n, m) for m in nodes):
-                continue
-            movers.append(n)
+        movers = self._outermost(item_ids)
         if not movers:
             return False
+        mover_ids = {m.id for m in movers}
 
         new_parent = self.find_item(new_parent_id) if new_parent_id else None
         if new_parent_id is not None and not isinstance(new_parent, GroupNode):
             return False
-        if new_parent is not None and any(self._is_descendant(new_parent, m) for m in movers):
+        if new_parent is not None and (new_parent.id in mover_ids or any(
+                g.id in mover_ids for g in self._ancestors(new_parent.id))):
+            return False                                    # into itself
+        if before_id is not None and (before_id in mover_ids
+                                      or self.find_item(before_id) is None
+                                      or self.find_parent(before_id) is not new_parent):
             return False
+
+        before = [self._lookup(m.id)[1:] for m in movers]
+        for siblings in {id(s): s for s in (self._siblings(p) for p, _ in before)}.values():
+            siblings[:] = [s for s in siblings if s.id not in mover_ids]
         new_siblings = self._siblings(new_parent)
-        if before_id is not None and (any(m.id == before_id for m in movers)
-                                      or not any(s.id == before_id for s in new_siblings)):
-            return False
-
-        before = [(self.find_parent(m.id), self.get_index_in_parent(m.id)) for m in movers]
-        for m in movers:
-            siblings = self._siblings(self.find_parent(m.id))
-            siblings.pop(next(i for i, s in enumerate(siblings) if s is m))
-
         idx = (len(new_siblings) if before_id is None
                else next(i for i, s in enumerate(new_siblings) if s.id == before_id))
         new_siblings[idx:idx] = movers
+        self._dirty()
 
         if all(p is new_parent and i == idx + k for k, (p, i) in enumerate(before)):
             return False
@@ -601,9 +632,7 @@ class LayerOrderModel:
         travel with it. Returns True if anything moved.
         """
         log.debug("move_items_by_one %s up=%s", item_ids, up)
-        selected = [n for n in (self.find_item(i) for i in item_ids) if n is not None]
-        ids = {n.id for n in selected
-               if not any(m is not n and self._is_descendant(n, m) for m in selected)}
+        ids = {n.id for n in self._outermost(item_ids)}
         moved = False
         parents = {id(self.find_parent(i)): self.find_parent(i) for i in ids}
         for parent in parents.values():
@@ -615,6 +644,7 @@ class LayerOrderModel:
                     siblings[i], siblings[j] = siblings[j], siblings[i]
                     moved = True
         if moved:
+            self._dirty()
             self._structure_changed(EVENT_ITEM_MOVED, {"item_ids": sorted(ids)})
         return moved
 
@@ -630,42 +660,14 @@ class LayerOrderModel:
         for parent, ids in by_parent.values():
             siblings = self._siblings(parent)
             before = [s.id for s in siblings]
-            picked = [s for s in siblings if s.id in ids]
-            rest = [s for s in siblings if s.id not in ids]
+            chosen = set(ids)
+            picked = [s for s in siblings if s.id in chosen]
+            rest = [s for s in siblings if s.id not in chosen]
             siblings[:] = picked + rest if to_top else rest + picked
             moved |= [s.id for s in siblings] != before
         if moved:
+            self._dirty()
             self._structure_changed(EVENT_ITEM_MOVED, {"item_ids": list(item_ids)})
-
-    # ------------------------------------------------------------------
-    # Empty groups
-    # ------------------------------------------------------------------
-    def prune_empty_groups(self) -> int:
-        """Remove every group without children (cascading). Returns the count."""
-        removed = self._prune_empty_groups_internal()
-        if removed:
-            self._emit(EVENT_ORDER_CHANGED, {})
-        return removed
-
-    def _prune_empty_groups_internal(self) -> int:
-        removed = 0
-
-        def rec(children: list) -> None:
-            nonlocal removed
-            i = 0
-            while i < len(children):
-                ch = children[i]
-                if isinstance(ch, GroupNode):
-                    rec(ch.children)
-                    if not ch.children:
-                        children.pop(i)
-                        removed += 1
-                        self._emit(EVENT_GROUP_DELETED, {"group_id": ch.id, "unwrapped_children": []})
-                        continue
-                i += 1
-
-        rec(self._root)
-        return removed
 
     # ------------------------------------------------------------------
     # Persistence
@@ -683,11 +685,28 @@ class LayerOrderModel:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _is_descendant(self, candidate: Node | None, ancestor: Node | None) -> bool:
-        """True if `candidate` is `ancestor` or lies anywhere below it."""
-        if candidate is None or ancestor is None:
-            return False
-        if candidate is ancestor:
-            return True
-        return isinstance(ancestor, GroupNode) and any(
-            self._is_descendant(candidate, ch) for ch in ancestor.children)
+    def _outermost(self, item_ids: list[str]) -> list[Node]:
+        """Existing nodes for `item_ids`, in the given order, without
+        duplicates and without nodes nested inside another listed node
+        (they travel with it). O(k · depth)."""
+        listed = set(item_ids)
+        out: list[Node] = []
+        seen: set[str] = set()
+        for item_id in item_ids:
+            node = self.find_item(item_id)
+            if node is None or item_id in seen:
+                continue
+            seen.add(item_id)
+            if not any(g.id in listed for g in self._ancestors(item_id)):
+                out.append(node)
+        return out
+
+
+def _flatten_layer_ids(nodes: list[Node]) -> list[str]:
+    out: list[str] = []
+    for n in nodes:
+        if isinstance(n, GroupNode):
+            out.extend(_flatten_layer_ids(n.children))
+        else:
+            out.append(n.id)
+    return out

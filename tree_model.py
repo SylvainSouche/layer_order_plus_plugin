@@ -40,9 +40,13 @@ _FLAGS = (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag
 
 
 class _Item:
-    """One rendered row. Plain data; the tree of these is replaced on render."""
+    """One rendered row. Plain data; the tree of these is replaced on render
+    (never restructured), so each item's row is fixed at construction. A
+    group's checkbox comes from its visible/total layer counts, kept up to
+    date by LayerOrderItemModel.set_visible: both are O(1) to read."""
 
-    __slots__ = ("children", "icon", "id", "name", "parent", "type", "visible")
+    __slots__ = ("children", "icon", "id", "layers", "name", "parent", "row_",
+                 "shown", "type", "visible")
 
     def __init__(self, node: dict | None, parent: _Item | None):
         self.parent = parent
@@ -53,9 +57,17 @@ class _Item:
         self.visible: bool = bool(node.get("visible", True))
         self.icon: QIcon | None = node.get("icon")
         self.children = [_Item(ch, self) for ch in node.get("children", [])]
+        self.row_ = 0
+        for i, ch in enumerate(self.children):
+            ch.row_ = i
+        if self.type == TYPE_LAYER:
+            self.layers, self.shown = 1, int(self.visible)
+        else:
+            self.layers = sum(ch.layers for ch in self.children)
+            self.shown = sum(ch.shown for ch in self.children)
 
     def row(self) -> int:
-        return self.parent.children.index(self) if self.parent is not None else 0
+        return self.row_
 
     def walk(self):
         for ch in self.children:
@@ -65,10 +77,9 @@ class _Item:
     def check_state(self) -> Qt.CheckState:
         if self.type == TYPE_LAYER:
             return Qt.CheckState.Checked if self.visible else Qt.CheckState.Unchecked
-        states = {it.visible for it in self.walk() if it.type == TYPE_LAYER}
-        if states == {False}:
+        if self.layers and not self.shown:
             return Qt.CheckState.Unchecked
-        if states == {True, False}:
+        if 0 < self.shown < self.layers:
             return Qt.CheckState.PartiallyChecked
         return Qt.CheckState.Checked
 
@@ -115,9 +126,14 @@ class LayerOrderItemModel(QAbstractItemModel):
     def set_visible(self, layer_id: str, visible: bool) -> None:
         """Update a layer's checkbox and the derived state of its groups."""
         item = self._by_id.get(layer_id)
-        if item is None:
+        if item is None or item.visible == bool(visible):
             return
         item.visible = bool(visible)
+        delta = 1 if item.visible else -1
+        node = item
+        while node is not None:
+            node.shown += delta
+            node = node.parent
         while item is not None and item is not self._root:
             ix = self.index_of(item.id)
             self.dataChanged.emit(ix, ix, [Qt.ItemDataRole.CheckStateRole])

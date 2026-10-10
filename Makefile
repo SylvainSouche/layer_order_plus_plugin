@@ -12,14 +12,14 @@ DIST_DIR     := $(PLUGIN_DIR)/dist
 ZIP_NAME     := $(PLUGIN_NAME)-$(VERSION).zip
 ZIP_PATH     := $(DIST_DIR)/$(ZIP_NAME)
 
-.PHONY: all zip sync clean show-version help check test lint qgis-test test-data
+.PHONY: all zip sync clean show-version help check test lint qgis-test test-data bench
 
 all: zip
 
 help:
 	@echo "VERSION (from ./VERSION) = $(VERSION)"
 	@echo "Output zip               = $(ZIP_PATH)"
-	@echo "Targets: zip sync clean show-version check lint test qgis-test test-data"
+	@echo "Targets: zip sync clean show-version check lint test qgis-test test-data bench"
 
 show-version:
 	@echo $(VERSION)
@@ -49,6 +49,11 @@ lint:
 # End-to-end checks inside a real (headless) QGIS — see tests/qgis/
 qgis-test:
 	@bash "$(PLUGIN_DIR)/scripts/run_qgis_checks.sh"
+
+# Time / memory against the number of layers, n = 1 … 8192 (docs/PERFORMANCE.md).
+# In QGIS: scripts/run_qgis_checks.sh --script tests/perf/bench_qgis.py
+bench:
+	QT_QPA_PLATFORM=offscreen python3 "$(PLUGIN_DIR)/tests/perf/bench_core.py"
 
 # Regenerate the manual-test project (tests/data/test.qgz + test_layers.gpkg)
 test-data:

@@ -11,6 +11,7 @@ from advanced_layer_order.model import (
     LayerNode,
     LayerOrderModel,
 )
+from tests.helpers import move_item
 
 # ---------- helpers ----------
 
@@ -92,48 +93,26 @@ def test_move_items_to_bottom_single():
 
 
 # ====================================================================
-# BUG-4: Moving all items out of a group leaves an empty group
+# BUG-4: Moving all items out of a group keeps the (empty) group
 # ====================================================================
 
-def test_move_all_items_out_of_group_does_not_prune():
-    """Moving all items out of a group does NOT prune it.
-
-    Pruning only happens on layer DELETION, not on moves. The user may
-    be moving items out temporarily and wants to drop them back in.
-    """
+def test_move_all_items_out_of_group_keeps_it():
+    """Moving all items out of a group keeps it (groups are only removed by the user)."""
     model = _make_model_with_tree([
         ("group", "g1", "Group1", [
             ("layer", "a", "A"),
             ("layer", "b", "B"),
         ])
     ])
-    model.set_remove_empty_groups(True)
     # Move A to top-level
-    model.move_item("a", None, 0)
+    move_item(model, "a", None, 0)
     # Move B to top-level
-    model.move_item("b", None, 1)
-    # Group1 should still exist (empty) — NOT pruned
+    move_item(model, "b", None, 1)
+    # Group1 still exists, empty
     grp = model.find_item("g1")
     assert grp is not None, "Empty group should persist after move (not a delete)"
     assert len(grp.children) == 0
     assert _flat_ids(model) == ["a", "b"]
-
-
-def test_move_all_items_out_of_group_keeps_when_setting_off():
-    """With remove_empty_groups=False, empty group should persist."""
-    model = _make_model_with_tree([
-        ("group", "g1", "Group1", [
-            ("layer", "a", "A"),
-            ("layer", "b", "B"),
-        ])
-    ])
-    model.set_remove_empty_groups(False)
-    model.move_item("a", None, 0)
-    model.move_item("b", None, 1)
-    # Group1 should still exist (empty)
-    grp = model.find_item("g1")
-    assert grp is not None, "Empty group should persist when setting is off"
-    assert len(grp.children) == 0
 
 
 # ====================================================================
@@ -156,7 +135,7 @@ def test_reconcile_within_group_swap():
         ])
     ])
     # Simulate: swap A and B within Group1
-    model.move_item("b", "g1", 0)
+    move_item(model, "b", "g1", 0)
     grp = model.find_item("g1")
     assert [c.id for c in grp.children] == ["b", "a"]
 
@@ -169,8 +148,8 @@ def test_create_group_from_two_layers():
     """[A, B, C] → select A+B, create group → (Group(A, B), C)."""
     model = _make_model_with_flat([("a", "A"), ("b", "B"), ("c", "C")])
     gid = model.create_group("NewGroup", parent_id=None, index=2)
-    model.move_item("a", gid, 0)
-    model.move_item("b", gid, 1)
+    move_item(model, "a", gid, 0)
+    move_item(model, "b", gid, 1)
     assert _flat_ids(model) == ["a", "b", "c"]
     grp = model.find_item(gid)
     assert grp is not None
@@ -184,8 +163,8 @@ def test_create_group_from_two_groups():
         ("group", "g2", "Group2", [("layer", "c", "C"), ("layer", "d", "D")]),
     ])
     outer = model.create_group("Outer", parent_id=None, index=2)
-    model.move_item("g1", outer, 0)
-    model.move_item("g2", outer, 1)
+    move_item(model, "g1", outer, 0)
+    move_item(model, "g2", outer, 1)
     assert _flat_ids(model) == ["a", "b", "c", "d"]
     outer_node = model.find_item(outer)
     assert outer_node is not None
@@ -230,8 +209,8 @@ def test_move_layer_into_group():
     """(A, B, C) → move B into new group → (A, Group(B), C) → move A in → (Group(A, B), C)."""
     model = _make_model_with_flat([("a", "A"), ("b", "B"), ("c", "C")])
     gid = model.create_group("Group", parent_id=None, index=1)
-    model.move_item("b", gid, 0)
-    model.move_item("a", gid, 0)
+    move_item(model, "b", gid, 0)
+    move_item(model, "a", gid, 0)
     assert _flat_ids(model) == ["a", "b", "c"]
     grp = model.find_item(gid)
     assert [c.id for c in grp.children] == ["a", "b"]
@@ -243,7 +222,7 @@ def test_move_layer_out_of_group():
         ("group", "g1", "Group1", [("layer", "a", "A"), ("layer", "b", "B")]),
         ("layer", "c", "C"),
     ])
-    model.move_item("a", None, 0)
+    move_item(model, "a", None, 0)
     assert _flat_ids(model) == ["a", "b", "c"]
     grp = model.find_item("g1")
     assert [c.id for c in grp.children] == ["b"]
@@ -261,7 +240,7 @@ def test_move_layer_into_nested_group():
             ("layer", "c", "C"),
         ])
     ])
-    model.move_item("c", "inner", 0)
+    move_item(model, "c", "inner", 0)
     inner = model.find_item("inner")
     assert [c.id for c in inner.children] == ["c", "a", "b"]
 
@@ -272,7 +251,7 @@ def test_move_group_into_another_group():
         ("group", "g1", "Group1", [("layer", "a", "A")]),
         ("group", "g2", "Group2", [("layer", "b", "B")]),
     ])
-    model.move_item("g1", "g2", 0)
+    move_item(model, "g1", "g2", 0)
     g2 = model.find_item("g2")
     assert [c.id for c in g2.children] == ["g1", "b"]
 
@@ -287,7 +266,7 @@ def test_move_group_into_itself_blocked():
         ("group", "g1", "Group1", [("layer", "a", "A")]),
     ])
     before = model.serialize()
-    model.move_item("g1", "g1", 0)  # should be no-op
+    move_item(model, "g1", "g1", 0)  # should be no-op
     after = model.serialize()
     assert before == after
 
@@ -300,7 +279,7 @@ def test_move_group_into_descendant_blocked():
         ])
     ])
     before = model.serialize()
-    model.move_item("outer", "inner", 0)  # should be no-op
+    move_item(model, "outer", "inner", 0)  # should be no-op
     after = model.serialize()
     assert before == after
 
@@ -322,35 +301,6 @@ def test_multi_move_preserves_order_to_bottom():
     model = _make_model_with_flat([("a", "A"), ("b", "B"), ("c", "C"), ("d", "D")])
     model.move_items_to_boundary(["a", "b"], to_top=False)
     assert _flat_ids(model) == ["c", "d", "a", "b"]
-
-
-# ====================================================================
-# Scenario: empty group handling
-# ====================================================================
-
-def test_prune_empty_groups_cascades():
-    """(Outer(Inner())) → prune → () — both removed."""
-    model = _make_model_with_tree([
-        ("group", "outer", "Outer", [
-            ("group", "inner", "Inner", []),
-        ])
-    ])
-    removed = model.prune_empty_groups()
-    assert removed == 2
-    assert model.find_item("outer") is None
-    assert model.find_item("inner") is None
-
-
-def test_prune_empty_groups_keeps_non_empty():
-    """(Group1(A), Empty()) → prune → (Group1(A))."""
-    model = _make_model_with_tree([
-        ("group", "g1", "Group1", [("layer", "a", "A")]),
-        ("group", "g2", "Empty", []),
-    ])
-    removed = model.prune_empty_groups()
-    assert removed == 1
-    assert model.find_item("g1") is not None
-    assert model.find_item("g2") is None
 
 
 # ====================================================================

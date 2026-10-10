@@ -31,7 +31,7 @@ for _ in range(2):
     plugin.view_controller.handle_drop([ids[1]], "", "end")
     pump()
     before = stack.index()
-    check(view.btn_undo.isEnabled() and view.btn_undo.toolTip() == "Undo: Reorder layers",
+    check(view.btn_undo.isEnabled() and view.btn_undo.toolTip() == "Undo: Move Items",
           "Undo button names the step")
     view.btn_undo.click()
     pump()

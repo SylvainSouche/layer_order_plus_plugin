@@ -26,6 +26,7 @@ from advanced_layer_order.model import (
     LayerOrderModel,
     new_group_id,
 )
+from tests.helpers import move_item
 
 # ---------- fixtures ----------
 
@@ -220,21 +221,7 @@ def test_remove_layer_missing_is_noop(model, captured_events):
     assert captured_events == []
 
 
-def test_remove_layer_auto_prunes_empty_group_when_setting_on(model, captured_events):
-    model.set_remove_empty_groups(True)
-    gid = model.create_group("Group")
-    model.add_layer("l1", "Layer 1", parent_id=gid)
-    captured_events.clear()
-    model.remove_layer("l1")
-    # Group should be auto-pruned
-    assert model.find_item(gid) is None
-    # Events: LAYER_REMOVED, GROUP_DELETED, ORDER_CHANGED
-    types = _event_types(captured_events)
-    assert EVENT_GROUP_DELETED in types
-
-
-def test_remove_layer_keeps_empty_group_when_setting_off(model, captured_events):
-    model.set_remove_empty_groups(False)
+def test_remove_layer_keeps_its_group(model, captured_events):
     gid = model.create_group("Group")
     model.add_layer("l1", "Layer 1", parent_id=gid)
     captured_events.clear()
@@ -398,7 +385,7 @@ def test_move_item_top_level_to_top_level(model, captured_events):
     model.add_layer("l2", "L2")
     model.add_layer("l3", "L3")
     captured_events.clear()
-    model.move_item("l3", None, 0)
+    move_item(model, "l3", None, 0)
     assert [n.id for n in model.get_root()] == ["l3", "l1", "l2"]
     assert _event_types(captured_events) == [EVENT_ITEM_MOVED, EVENT_ORDER_CHANGED]
 
@@ -406,7 +393,7 @@ def test_move_item_top_level_to_top_level(model, captured_events):
 def test_move_item_into_group(model):
     gid = model.create_group("Group")
     model.add_layer("l1", "L1")
-    model.move_item("l1", gid, 0)
+    move_item(model, "l1", gid, 0)
     grp = model.find_item(gid)
     assert [c.id for c in grp.children] == ["l1"]
     assert len(model.get_root()) == 1  # only the group left at top
@@ -415,25 +402,11 @@ def test_move_item_into_group(model):
 def test_move_item_out_of_group(model):
     """Move a layer out of a group to top-level.
 
-    Groups are NOT pruned on move (only on layer deletion). The empty
-    group persists so the user can drop items back in.
+    The emptied group stays (groups are only removed by the user).
     """
     gid = model.create_group("Group")
     model.add_layer("l1", "L1", parent_id=gid)
-    model.move_item("l1", None, 0)
-    # Group persists (empty) — not pruned on move
-    assert [n.id for n in model.get_root()] == ["l1", gid]
-    grp = model.find_item(gid)
-    assert grp is not None
-    assert len(grp.children) == 0
-
-
-def test_move_item_out_of_group_keeps_empty_when_setting_off(model):
-    """Move a layer out of a group with remove_empty_groups=False → group persists."""
-    model.set_remove_empty_groups(False)
-    gid = model.create_group("Group")
-    model.add_layer("l1", "L1", parent_id=gid)
-    model.move_item("l1", None, 0)
+    move_item(model, "l1", None, 0)
     # Group persists (empty)
     assert [n.id for n in model.get_root()] == ["l1", gid]
     grp = model.find_item(gid)
@@ -445,7 +418,7 @@ def test_move_item_same_position_is_noop(model, captured_events):
     model.add_layer("l1", "L1")
     model.add_layer("l2", "L2")
     captured_events.clear()
-    model.move_item("l1", None, 0)  # already at index 0
+    move_item(model, "l1", None, 0)  # already at index 0
     # No ITEM_MOVED because position didn't change (model still emits nothing)
     assert captured_events == []
 
@@ -455,14 +428,14 @@ def test_move_item_prevents_cycle(model, captured_events):
     inner = model.create_group("Inner", parent_id=outer)
     captured_events.clear()
     # Try to move Outer into Inner — should be blocked
-    model.move_item(outer, inner, 0)
+    move_item(model, outer, inner, 0)
     # No events emitted, Outer still at top level
     assert captured_events == []
     assert model.find_parent(outer) is None
 
 
 def test_move_item_missing_is_noop(model, captured_events):
-    model.move_item("nonexistent", None, 0)
+    move_item(model, "nonexistent", None, 0)
     assert captured_events == []
 
 
@@ -502,41 +475,6 @@ def test_move_items_multiple(model):
     # Items are processed in reverse-index order (l4 first, then l2).
     # After: l2, l4, l1, l3 (l4 moved to top, then l2 moved to top of that)
     assert [n.id for n in model.get_root()] == ["l2", "l4", "l1", "l3"]
-
-
-# ---------- prune_empty_groups ----------
-
-def test_prune_empty_groups_no_op_when_no_empty(model):
-    gid = model.create_group("Group")
-    model.add_layer("l1", "L1", parent_id=gid)
-    removed = model.prune_empty_groups()
-    assert removed == 0
-
-
-def test_prune_empty_groups_removes_top_level_empty(model):
-    model.create_group("Lonely")
-    removed = model.prune_empty_groups()
-    assert removed == 1
-    assert len(model.get_root()) == 0
-
-
-def test_prune_empty_groups_cascades(model):
-    outer = model.create_group("Outer")
-    model.create_group("Inner", parent_id=outer)  # empty Inner inside Outer
-    removed = model.prune_empty_groups()
-    assert removed == 2  # Inner first, then Outer (now empty)
-    assert len(model.get_root()) == 0
-
-
-def test_prune_empty_groups_keeps_groups_with_layers(model):
-    a = model.create_group("A")
-    model.add_layer("l1", "L1", parent_id=a)
-    model.create_group("Empty")  # top-level empty
-    b = model.create_group("B")
-    model.add_layer("l2", "L2", parent_id=b)
-    removed = model.prune_empty_groups()
-    assert removed == 1
-    assert {n.name for n in model.get_root()} == {"A", "B"}
 
 
 # ---------- serialize / load_from_json ----------
@@ -717,22 +655,6 @@ def test_block_notifications_listener_exception_does_not_break_model(model):
 
 # ---------- settings ----------
 
-def test_get_set_remove_empty_groups(model):
-    assert model.get_remove_empty_groups() is True  # default
-    model.set_remove_empty_groups(False)
-    assert model.get_remove_empty_groups() is False
-    model.set_remove_empty_groups(True)
-    assert model.get_remove_empty_groups() is True
-
-
-def test_set_remove_empty_groups_emits_setting_changed(model, captured_events):
-    model.set_remove_empty_groups(False)
-    assert captured_events == [("setting_changed", {"key": "remove_empty_groups", "value": False})]
-    captured_events.clear()
-    model.set_remove_empty_groups(False)
-    assert captured_events == []
-
-
 # ---------- listener registration ----------
 
 def test_add_listener_idempotent(model):
@@ -852,8 +774,9 @@ def test_remove_layer_keeps_unrelated_empty_groups(model):
     inner = model.create_group("Inner", parent_id=outer)
     model.add_layer("a", "A", parent_id=inner)
     model.add_layer("b", "B")
-    model.remove_layer("a")                            # empties Inner, then Outer
-    assert [n.id for n in model.get_root()] == [keep, "b"]
+    model.remove_layer("a")                            # empties Inner (and Outer)
+    assert [n.id for n in model.get_root()] == [keep, outer, "b"]
+    assert [n.id for n in model.find_item(outer).children] == [inner]
 
 
 def test_restore_structure_keeps_current_expansion(model):
@@ -861,7 +784,7 @@ def test_restore_structure_keeps_current_expansion(model):
     model.add_layer("a", "A", parent_id=g)
     model.add_layer("b", "B")
     snapshot = model.serialize()
-    model.move_item("b", g, 0)
+    move_item(model, "b", g, 0)
     model.set_expanded(g, False)                       # not an undoable edit
     model.restore_structure(snapshot)
     assert model.get_flattened_layer_ids() == ["a", "b"]

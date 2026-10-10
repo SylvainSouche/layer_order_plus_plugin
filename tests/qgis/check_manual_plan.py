@@ -173,7 +173,7 @@ for step, args, tree, order, top in [
     ("3.2", (["E"], "D", DROP_BELOW), "ABCD[AB[A, B], CD[C, D, E]]", "A B C D E", "A"),
     ("3.3", (["E"], "AB", DROP_ON), "ABCD[AB[A, B, E], CD[C, D]]", "A B E C D", "A"),
     ("3.4", (["C"], "", DROP_END), "ABCD[AB[A, B], CD[D]], E, C", "A B D E C", "A"),
-    ("3.5", (["E"], "C", DROP_ON), "ABCD[AB[A, B], CD[New group[C, E], D]]", "A B C E D", "A"),
+    ("3.5", (["E"], "C", DROP_ON), "ABCD[AB[A, B], CD[New Group[C, E], D]]", "A B C E D", "A"),
     ("3.7", (["D", "C"], "A", DROP_ABOVE), "ABCD[AB[C, D, A, B], CD[]], E", "C D A B E", "C"),
 ]:
     baseline()
@@ -252,16 +252,10 @@ expect("7.3", "ABCD[AB[A, B], CD[F2, C, D]], E", "A B F2 C D E", "A")
 proj.removeMapLayer(f_layer.id())
 expect("7.4", BASE, "A B C D E", "A")
 proj.removeMapLayers([lid("C"), lid("D")])
-expect("7.5", "ABCD[AB[A, B]], E", "A B E", "A")
+expect("7.5", "ABCD[AB[A, B], CD[]], E", "A B E", "A")     # groups are kept
 baseline()
-view.chk_remove_empty.click()
-proj.removeMapLayers([lid("C"), lid("D")])
-expect("7.6", "ABCD[AB[A, B], CD[]], E", "A B E")
-baseline()
-if not model.get_remove_empty_groups():
-    view.chk_remove_empty.click()
 view.ask_text = lambda *a: "Later"
 view.create_group_requested.emit([])
 proj.removeMapLayer(lid("E"))
-expect("7.7", "ABCD[AB[A, B], CD[C, D]], Later[]", "A B C D")
+expect("7.6", "ABCD[AB[A, B], CD[C, D]], Later[]", "A B C D")
 finish()

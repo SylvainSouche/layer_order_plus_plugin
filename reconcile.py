@@ -72,19 +72,39 @@ def _same_without(old: list, new: list, ids: set) -> bool:
     return [x for x in old if x not in ids] == [x for x in new if x not in ids]
 
 
+def _single_moves(old: list, new: list) -> list:
+    """Every single layer whose move alone turns `old` into `new`, in `old`
+    order. O(n): a move from p to q changes exactly the span p..q, so the
+    layer is the span's first (moved down) or last (moved up) one."""
+    n = len(old)
+    i = 0
+    while i < n and old[i] == new[i]:
+        i += 1
+    if i == n:
+        return []
+    j = n - 1
+    while old[j] == new[j]:
+        j -= 1
+    out = []
+    if new[j] == old[i] and old[i + 1:j + 1] == new[i:j]:
+        out.append({old[i]})
+    if new[i] == old[j] and old[i:j] == new[i + 1:j + 1]:
+        out.append({old[j]})
+    return out
+
+
 def _moved_candidates(old: list, new: list, hint: Iterable[str]) -> list:
     """Possible sets of moved layers, most likely first.
 
     A valid drag hint is the answer. Otherwise a single-layer move is often
     ambiguous (``E A B`` → ``A E B``: E moved down, or A moved up), so every
     single layer that explains the change is a candidate; failing that, the
-    complement of a longest common subsequence.
+    complement of a longest common subsequence (O(n log n)).
     """
     hint = set(hint or ()) & set(old)
     if hint and _same_without(old, new, hint):
         return [hint]
-    singles = [{x} for x in old if _same_without(old, new, {x})]
-    return singles or [set(old) - _lcs_ids(old, new)]
+    return _single_moves(old, new) or [set(old) - _lcs_ids(old, new)]
 
 
 def _parents(nodes, parent=None, out=None) -> dict:
@@ -98,66 +118,25 @@ def _parents(nodes, parent=None, out=None) -> dict:
     return out
 
 
+def _edges(nodes, parent=None, out=None) -> dict:
+    """{layer id: True if top level, or first or last in its group}."""
+    out = {} if out is None else out
+    last = len(nodes) - 1
+    for i, n in enumerate(nodes):
+        if isinstance(n, GroupNode):
+            _edges(n.children, n, out)
+        else:
+            out[n.id] = parent is None or i in (0, last)
+    return out
+
+
 def _score(old_root: list, new_root: list, moved: set) -> tuple:
     """Lower is more plausible: fewest membership changes, then layers that
     landed strictly between two members of a group (unambiguous) first."""
     before, after = _parents(old_root), _parents(new_root)
     changed = sum(before[lid] != after[lid] for lid in before)
-    tree = _Tree(new_root)
-    on_edge = 0
-    for lid in moved:
-        parent = tree.parent(lid)
-        siblings = tree.children_of(parent)
-        i = next(k for k, ch in enumerate(siblings) if ch.id == lid)
-        on_edge += parent is None or i == 0 or i == len(siblings) - 1
-    return changed, on_edge
-
-
-class _Tree:
-    """Small helper giving parent lookups over a node list being edited."""
-
-    def __init__(self, root: list):
-        self.root = root
-
-    def parent(self, node_id) -> GroupNode | None:
-        def walk(children, parent):
-            for ch in children:
-                if ch.id == node_id:
-                    return True, parent
-                if isinstance(ch, GroupNode):
-                    found, p = walk(ch.children, ch)
-                    if found:
-                        return True, p
-            return False, None
-        return walk(self.root, None)[1]
-
-    def chain(self, node_id) -> list:
-        """Ancestor groups of node_id, outermost first ([] for top level)."""
-        out = []
-        p = self.parent(node_id)
-        while p is not None:
-            out.append(p)
-            p = self.parent(p.id)
-        return list(reversed(out))
-
-    def children_of(self, group: GroupNode | None) -> list:
-        return group.children if group is not None else self.root
-
-    def child_containing(self, group: GroupNode | None, node_id) -> int | None:
-        """Index in `group` of the child that is, or contains, node_id."""
-        chain = self.chain(node_id)
-        if group is None:
-            top = chain[0].id if chain else node_id
-        else:
-            ids = [g.id for g in chain]
-            if group.id not in ids:
-                return None
-            k = ids.index(group.id)
-            top = chain[k + 1].id if k + 1 < len(chain) else node_id
-        for i, ch in enumerate(self.children_of(group)):
-            if ch.id == top:
-                return i
-        return None
+    edges = _edges(new_root)
+    return changed, sum(edges[lid] for lid in moved)
 
 
 def reconcile_tree(root: list, new_order: list, moved_hint: Iterable[str] = ()) -> list | None:
@@ -178,30 +157,75 @@ def reconcile_tree(root: list, new_order: list, moved_hint: Iterable[str] = ()) 
 
 
 def _place_moved(root: list, new_order: list, moved: set) -> list:
-    """Detach `moved` layers and re-insert them at their new flat positions."""
-    tree = _Tree(copy.deepcopy(root))
+    """Detach `moved` layers and re-insert them at their new flat positions.
+
+    O(n + k·depth): one walk indexes the tree, each moved layer is placed
+    through parent links (as "before/after this node" or "at the end of
+    this group"), and one final pass splices them all in.
+    """
+    root = copy.deepcopy(root)
     moved = set(moved)
+    parent: dict = {}          # node id → parent GroupNode (None = top level)
+    nodes: dict = {}           # moved layer id → its node
 
-    # Detach moved layers, remembering their original parent
-    orig_parent = {}
-    nodes = {}
-    for lid in moved:
-        p = tree.parent(lid)
-        siblings = tree.children_of(p)
-        idx = next(i for i, ch in enumerate(siblings) if ch.id == lid)
-        nodes[lid] = siblings.pop(idx)
-        orig_parent[lid] = p.id if p is not None else None
+    def index(children, p):
+        for ch in children:
+            parent[ch.id] = p
+            if ch.id in moved:
+                nodes[ch.id] = ch
+            if isinstance(ch, GroupNode):
+                index(ch.children, ch)
+    index(root, None)
+    orig_parent = {lid: getattr(parent[lid], "id", None) for lid in moved}
 
+    def detach(children):
+        out = []
+        for ch in children:
+            if ch.id in moved:
+                continue
+            if isinstance(ch, GroupNode):
+                ch.children = detach(ch.children)
+            out.append(ch)
+        return out
+    root = detach(root)
+
+    def chain(node_id) -> list:
+        """Ancestor groups of node_id, outermost first ([] for top level)."""
+        out = []
+        p = parent[node_id]
+        while p is not None:
+            out.append(p)
+            p = parent[p.id]
+        return out[::-1]
+
+    def child_containing(group, node_id):
+        """Id of the child of `group` that is, or contains, node_id."""
+        cur = node_id
+        while parent[cur] is not group:
+            if parent[cur] is None:
+                return None
+            cur = parent[cur].id
+        return cur
+
+    # Next anchor (non-moved layer) after each position
+    next_anchor = [None] * len(new_order)
+    anchor = None
+    for pos in range(len(new_order) - 1, -1, -1):
+        next_anchor[pos] = anchor
+        if new_order[pos] not in moved:
+            anchor = new_order[pos]
+
+    before: dict = {}          # node id → moved layers just before it
+    after: dict = {}           # node id → moved layers just after it
+    end: dict = {}             # group id (None = top level) → appended layers
     for pos, lid in enumerate(new_order):
         if lid not in moved:
             continue
         prev_id = new_order[pos - 1] if pos > 0 else None
-        # Next neighbour that is already placed (an anchor); later moved
-        # layers are placed after this one, so they don't count.
-        next_id = next((x for x in new_order[pos + 1:] if x not in moved), None)
+        next_id = next_anchor[pos]
 
-        prev_chain = tree.chain(prev_id) if prev_id else []
-        next_chain = tree.chain(next_id) if next_id else []
+        prev_chain = chain(prev_id) if prev_id else []
+        next_chain = chain(next_id) if next_id else []
         common_depth = 0
         while (common_depth < min(len(prev_chain), len(next_chain))
                and prev_chain[common_depth] is next_chain[common_depth]):
@@ -215,14 +239,29 @@ def _place_moved(root: list, new_order: list, moved: set) -> list:
                 target = c
                 break
 
-        children = tree.children_of(target)
-        i = tree.child_containing(target, prev_id) if prev_id else None
-        if i is not None:
-            insert_at = i + 1
+        x = child_containing(target, prev_id) if prev_id else None
+        y = child_containing(target, next_id) if next_id and x is None else None
+        if x is not None:
+            after.setdefault(x, []).append(nodes[lid])
+        elif y is not None:
+            before.setdefault(y, []).append(nodes[lid])
         else:
-            j = tree.child_containing(target, next_id) if next_id else None
-            insert_at = j if j is not None else len(children)
-        children.insert(insert_at, nodes[lid])
-        moved = moved - {lid}  # now placed: acts as an anchor for the rest
+            end.setdefault(getattr(target, "id", None), []).append(nodes[lid])
+        parent[lid] = target   # now placed: an anchor for the moved layers after it
 
-    return tree.root
+    def rebuild(children, group_id):
+        out = []
+        stack = [(True, ch) for ch in reversed([*children, *end.get(group_id, ())])]
+        while stack:   # iterative: chains of "after" can be as long as k
+            full, n = stack.pop()
+            if not full:
+                if isinstance(n, GroupNode):
+                    n.children = rebuild(n.children, n.id)
+                out.append(n)
+                continue
+            stack.extend((True, m) for m in reversed(after.get(n.id, ())))
+            stack.append((False, n))
+            stack.extend((True, m) for m in reversed(before.get(n.id, ())))
+        return out
+
+    return rebuild(root, None)

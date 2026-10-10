@@ -15,9 +15,8 @@
    ```
 
    `make qgis-test` runs every check under each QGIS installed on the Mac
-   (official QGIS 4 app, MacPorts QGIS 3.44). The supported range is
-   3.40 – 4.x; 3.40 and 4.0 can't be installed here (MacPorts dropped
-   `qgis3-ltr`), so they rely on the shared code paths of 3.44 / 4.2.
+   (official QGIS 3.40 and 4.2 apps, MacPorts QGIS 3.44). The supported
+   range is 3.40 – 4.x; 4.0 relies on the shared code paths of 4.2.
 3. Run the manual acceptance test ([`TEST_SCENARIO.md`](TEST_SCENARIO.md))
    with that zip, on QGIS 4 and on QGIS 3.44.
 4. PR into `main`, merge, then tag `main`: `git tag v<VERSION>` and push

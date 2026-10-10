@@ -73,7 +73,7 @@ and D, and A covering B:
    **Layer Order** and **Advanced Layer Order**
    panels visible, and **View → Panels → Log Messages**, tab
    **AdvancedLayerOrder**, open. Any red message there is a failure.
-2. Tick *Verbose logging* in ALO only to investigate a failure.
+2. To investigate a failure, start QGIS with `QGIS_DEBUG=1` (Settings → Options → System → Environment) and tick *Verbose logging* in ALO: the box only appears in debug mode.
 
 ---
 
@@ -103,13 +103,13 @@ Open `tests/data/test.qgz`. The rows are cumulative.
 
 | # | Action | ALO | Native | Map |
 |---|---|---|---|---|
-| 2.1 | Select A, B → **Create group** (toolbar) → "AB" | `AB[A, B], C, D, E`, AB expanded and selected | `A B C D E` | unchanged: groups never change the order |
-| 2.2 | Select C, D → right-click → **Create group** → "CD" | `AB[A, B], CD[C, D], E` | `A B C D E` | unchanged |
-| 2.3 | Select AB and CD → **Create group** → "ABCD" | **baseline**: `ABCD[AB[A, B], CD[C, D]], E` | `A B C D E` | centre red |
+| 2.1 | Select A, B → **Add Group** (toolbar) → "AB" | `AB[A, B], C, D, E`, AB expanded and selected | `A B C D E` | unchanged: groups never change the order |
+| 2.2 | Select C, D → right-click → **Add Group** → "CD" | `AB[A, B], CD[C, D], E` | `A B C D E` | unchanged |
+| 2.3 | Select AB and CD → **Add Group** → "ABCD" | **baseline**: `ABCD[AB[A, B], CD[C, D]], E` | `A B C D E` | centre red |
 | 2.4 | **File → Save As** `~/lop-baseline.qgz` (outside the repository) | — | — | — |
 | 2.5 | Rename CD (toolbar) to "CD2", then delete CD2 (context menu) | `ABCD[AB[A, B], C, D], E` | `A B C D E` | unchanged |
 | 2.6 | **↶ Undo** twice | baseline, CD named CD again | `A B C D E` | unchanged |
-| 2.7 | Nothing selected → **Create group** | an empty "New group" at the bottom | unchanged | unchanged |
+| 2.7 | Nothing selected → **Add Group** | an empty "New Group" at the bottom | unchanged | unchanged |
 | 2.8 | Collapse ABCD with its arrow; expand it by double-click; collapse with ←; expand with → | toggles each time; the state stays through later edits | — | — |
 
 **"Reopen the baseline"** below means **File → Open**
@@ -125,7 +125,7 @@ Reopen the baseline before each row.
 | 3.2 | Drag E **below** D (line below D) | `ABCD[AB[A, B], CD[C, D, E]]` | `A B C D E` | centre red; D–E overlap **green** |
 | 3.3 | Drag E **onto** AB (AB highlighted) | `ABCD[AB[A, B, E], CD[C, D]]` | `A B E C D` | centre red; D–E overlap **blue** |
 | 3.4 | Drag C into the **empty area** below the list | `ABCD[AB[A, B], CD[D]], E, C` | `A B D E C` | centre red; C–D overlap **green**; B–C overlap **orange** |
-| 3.5 | Drag E **onto** C | `ABCD[AB[A, B], CD[New group[C, E], D]]`, the new group expanded | `A B C E D` | centre red; D–E overlap **blue** |
+| 3.5 | Drag E **onto** C | `ABCD[AB[A, B], CD[New Group[C, E], D]]`, the new group expanded | `A B C E D` | centre red; D–E overlap **blue** |
 | 3.6 | **↶ Undo** | baseline | `A B C D E` | centre red |
 | 3.7 | Click D, Ctrl-click C (reverse order), drag both **above** A | `ABCD[AB[C, D, A, B], CD[]], E` (CD kept, empty) | `C D A B E` | centre **yellow** |
 | 3.8 | Drag ABCD onto AB | "no drop" cursor; nothing changes | unchanged | unchanged |
@@ -183,9 +183,8 @@ Reopen the baseline. The rows are cumulative unless they say otherwise.
 | 7.2 | Rename F to "F2" in the Layers panel | renamed | renamed | — |
 | 7.3 | Select B → **▲**, then **↶ Undo** | after ▲: `AB[B, A]`; after Undo: `ABCD[AB[A, B], CD[F2, C, D]], E`: the move is undone, **F2 stays** | `A B F2 C D E` | centre red |
 | 7.4 | Remove F2 | `ABCD[AB[A, B], CD[C, D]], E` | `A B C D E` | purple gone |
-| 7.5 | *Remove empty groups* **on**: remove C and D | `ABCD[AB[A, B]], E` (CD removed) | `A B E` | yellow and green gone |
-| 7.6 | Reopen the baseline; *Remove empty groups* **off**; remove C and D | `ABCD[AB[A, B], CD[]], E` (the empty CD is kept) | `A B E` | — |
-| 7.7 | Reopen the baseline; *Remove empty groups* **on**; nothing selected → Create group "Later"; remove E | `ABCD[AB[A, B], CD[C, D]], Later[]`: **Later survives** | `A B C D` | blue gone |
+| 7.5 | Remove C and D | `ABCD[AB[A, B], CD[]], E`: the emptied CD is **kept** (as in QGIS's Layers panel) | `A B E` | yellow and green gone |
+| 7.6 | Reopen the baseline; nothing selected → Add Group "Later"; remove E | `ABCD[AB[A, B], CD[C, D]], Later[]`: **Later survives** | `A B C D` | blue gone |
 
 ![F added above C](img/test-map-ABFCDE.png)
 
@@ -202,7 +201,8 @@ Reopen the baseline. The rows are cumulative.
 | 8.5 | Focus in the ALO tree, press **Ctrl+Z** (⌘Z) and **Ctrl+Y** | nothing happens to the layer order (ALO has no undo shortcut) |
 | 8.6 | Toggle editing on layer A, move a vertex; focus in the **ALO panel**, Ctrl+Z | QGIS undoes the vertex move; the layer order doesn't change; then stop editing without saving |
 | 8.7 | Collapse ABCD, then **↶ Undo** | ABCD stays collapsed (expansion isn't undone) |
-| 8.8 | Reopen the baseline. ALO: ▲ on B. **Native** panel: drag D above C. Then **↶ Undo** twice, then **↷ Redo** twice | 1st Undo: D back below C (native `B A C D E`), tooltip was "Undo: Reorder in QGIS's Layer Order panel"; 2nd: B back below A (`A B C D E`, centre red); the two Redo replay both (`B A D C E`, centre orange) |
+| 8.8 | Reopen the baseline. ALO: ▲ on B. **Native** panel: drag D above C. Then **↶ Undo** twice, then **↷ Redo** twice | 1st Undo: D back below C (native `B A C D E`), tooltip was "Undo: Layer Order"; 2nd: B back below A (`A B C D E`, centre red); the two Redo replay both (`B A D C E`, centre orange) |
+| 8.9 | Set QGIS's language to French (Settings → Options → General → Override system locale, restart) | toolbar tooltips "Ajouter un groupe", "Monter", "Annuler"…; checkbox "Contrôler l'ordre de rendu"; context menu "Déplacer au-dessus" / "Déplacer en bas"; no *Verbose logging* box without `QGIS_DEBUG` |
 
 ## 9. Saving, closing, switching projects, restarting
 
