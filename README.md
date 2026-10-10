@@ -55,6 +55,10 @@ Advanced Layer Order is the QGIS 4 continuation of **Layer Order Plus**
 by **Samuel Kultz (Kultz Engenharia)**, published as a new plugin and
 maintained by **Sylvain Souche** with his agreement.
 
+> Huge thanks to Sam for the original plugin that provided me the feature
+> when I needed it. I just had to port it over to QGIS 4 for stability
+> reasons. — Sylvain
+
 * **1.0.0** — *Layer Order Plus*, the original plugin by Samuel Kultz:
   https://github.com/samkultz/layer_order_plus_plugin ·
   https://plugins.qgis.org/plugins/layer_order_plus/ (QGIS 3).
