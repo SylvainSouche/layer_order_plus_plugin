@@ -137,12 +137,13 @@ selected blocks move together and nothing ever leaves its group.
 
 ## Tests
 
-* `make test` — PyQt6 + pytest, no QGIS needed: Model, reconcile
+* `make test` — PyQt6 (or `QT_API=pyqt5` for PyQt5) + pytest, no QGIS needed: Model, reconcile
   (including an exhaustive "only the dragged layer changes group"
   invariant), scenarios, and `test_dnd.py`, which drives the real View +
   ViewController + Model and asserts the View never acts on its own input.
-* `make qgis-test` — `tests/qgis/check_*.py` inside a real headless QGIS
-  (uses `$QGIS_APP` or the newest `/Applications/QGIS*.app`): the full
+* `make qgis-test` — `tests/qgis/check_*.py` inside real headless QGIS,
+  under **every** install found (`/Applications/QGIS*.app`, MacPorts
+  `/Applications/MacPorts/QGIS*.app`, or `$QGIS_APPS`): the full
   user scenario, QGIS Layer Order panel drags with the event loop running
   between its two steps, the native panel's display after toggling
   control, a reopened project staying unmodified, plugin load/unload
@@ -152,6 +153,14 @@ selected blocks move together and nothing ever leaves its group.
 * `make test-data` — regenerates the manual-test project
   (`tests/data/make_test_project.py`).
 * `make lint` — ruff.
+
+## QGIS 3 and QGIS 4
+
+One package runs on QGIS 3.40 / 3.44 (Qt 5.15, PyQt5) and QGIS 4.x (Qt 6,
+PyQt6). All Qt imports go through `qgis.PyQt`; the two differences it
+doesn't cover — the undo classes' module and a mouse event's position —
+are in `compat.py`. The code stays Python 3.9-compatible (ruff
+`target-version`), the oldest Python a 3.40 packaging may ship.
 
 ## Packaging
 

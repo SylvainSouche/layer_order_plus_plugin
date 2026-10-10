@@ -30,6 +30,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Union
 
 log = logging.getLogger("AdvancedLayerOrder.model")
 
@@ -73,7 +74,7 @@ class GroupNode:
         return True
 
 
-Node = GroupNode | LayerNode
+Node = Union[GroupNode, LayerNode]   # runtime alias: no `|` (Python 3.9)
 
 
 def new_group_id() -> str:

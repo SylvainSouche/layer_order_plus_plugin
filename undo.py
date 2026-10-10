@@ -5,7 +5,7 @@ action. Undo/redo restore it through Model.restore_structure(), which keeps
 the current layer set and QGIS-mirrored state, so undo can never resurrect a
 deleted layer or drop one QGIS still has.
 """
-from qgis.PyQt.QtGui import QUndoCommand
+from .compat import QUndoCommand
 
 
 class TreeStateCommand(QUndoCommand):

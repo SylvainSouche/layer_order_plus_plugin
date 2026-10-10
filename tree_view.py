@@ -15,6 +15,7 @@ dock adds the current selection.
 from qgis.PyQt.QtCore import QModelIndex, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import QAbstractItemView, QTreeView
 
+from .compat import event_pos
 from .model import TYPE_GROUP
 from .tree_model import ROLE_ID, ROLE_TYPE
 
@@ -46,10 +47,10 @@ class LayerOrderTree(QTreeView):
         return True
 
     def mousePressEvent(self, e):
-        index = self.indexAt(e.position().toPoint())
+        index = self.indexAt(event_pos(e))
         if index.isValid() and self.model().hasChildren(index):
             left = self.visualRect(index).left()
-            if left - self.indentation() <= e.position().toPoint().x() < left:  # branch arrow
+            if left - self.indentation() <= event_pos(e).x() < left:  # branch arrow
                 self._toggle_intent(index)
                 return
         super().mousePressEvent(e)

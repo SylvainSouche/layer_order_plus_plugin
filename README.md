@@ -9,7 +9,7 @@ list draws on top of the map.
 | | |
 |---|---|
 | **Version** | [`VERSION`](VERSION) (synced into `metadata.txt`) |
-| **QGIS** | 4.x (PyQt6) |
+| **QGIS** | 3.40, 3.44 (Qt 5) and 4.x (Qt 6), from one package |
 | **License** | MIT |
 
 ## Features
@@ -34,8 +34,8 @@ User guide: [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md).
 ## Develop
 
 ```bash
-make test        # unit tests (PyQt6 + pytest, no QGIS needed)
-make qgis-test   # end-to-end checks in a real headless QGIS (macOS: /Applications/QGIS*.app or $QGIS_APP)
+make test        # unit tests, no QGIS needed (PyQt6; QT_API=pyqt5 make test for PyQt5)
+make qgis-test   # end-to-end checks under every QGIS installed (official app and MacPorts; or $QGIS_APPS)
 make lint        # ruff
 make check       # metadata / packaging checks
 make zip         # versioned plugin zip in dist/
@@ -51,7 +51,7 @@ Releasing: [`docs/RELEASING.md`](docs/RELEASING.md). Version history:
 
 ## History
 
-Advanced Layer Order is the QGIS 4 continuation of **Layer Order Plus**
+Advanced Layer Order is the continuation of **Layer Order Plus**
 by **Samuel Kultz (Kultz Engenharia)**, published as a new plugin and
 maintained by **Sylvain Souche** with his agreement.
 
@@ -67,7 +67,8 @@ maintained by **Sylvain Souche** with his agreement.
 * **1.2.x** — rewritten as a model / view / controller design; sync with
   QGIS's Layer Order panel.
 * **1.3.x** — move up / down, packaging for plugins.qgis.org, manual test
-  plan with verifiable data; published as *Advanced Layer Order*. Details
+  plan with verifiable data; published as *Advanced Layer Order*; runs on
+  QGIS 3.40 / 3.44 again as well as QGIS 4. Details
   in [`VERSION.md`](VERSION.md).
 
 Repository: https://github.com/SylvainSouche/qgis_advanced_layer_order ·
