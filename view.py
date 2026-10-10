@@ -68,6 +68,7 @@ class LayerOrderView(QDockWidget):
     control_toggled = pyqtSignal(bool)
     remove_empty_toggled = pyqtSignal(bool)
     verbose_toggled = pyqtSignal(bool)
+    undo_requested = pyqtSignal(bool)                    # True = undo, False = redo (keys in the panel)
 
     def __init__(self, parent=None):
         super().__init__("Advanced Layer Order", parent)
@@ -148,6 +149,7 @@ class LayerOrderView(QDockWidget):
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.selectionModel().selectionChanged.connect(self._update_group_buttons)
         self.tree.expand_intent.connect(lambda gid, on: self.expand_requested.emit([gid], on))
+        self.tree.undo_intent.connect(self.undo_requested)
         self.item_model.drop_intent.connect(self.drop_requested)
         self.item_model.check_intent.connect(self.check_requested)
 

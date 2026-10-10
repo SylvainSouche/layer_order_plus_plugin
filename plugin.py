@@ -106,10 +106,14 @@ class AdvancedLayerOrderPlugin(QObject):
         * Menu: "Undo/Redo layer order" in the plugin menu and the Edit menu.
           They carry no shortcut: a second Ctrl+Z shortcut next to QGIS's
           own would make both ambiguous.
-        * Keyboard: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z key presses that nothing
-          else handled reach the main window, where an event filter applies
-          them to our stack — unless a layer is being edited, in which case
-          QGIS's digitizing undo has priority.
+        * Keyboard, focus in the panel: the tree claims the keys itself
+          (ShortcutOverride, see tree_view.py), even while a layer is edited.
+        * Keyboard, focus elsewhere: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z key
+          presses that nothing else handled reach the main window, where an
+          event filter applies them to our stack — unless a layer is being
+          edited, in which case QGIS's digitizing undo has priority.
+        QGIS's own undo is the edit buffer of the layer being edited; a
+        plugin can't add steps to it, hence our own stack.
         """
         mw = self.iface.mainWindow()
         stack = self.view_controller.undo_stack

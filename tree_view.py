@@ -11,8 +11,13 @@ The ViewController records the wish in the Model, which renders it back.
 
 Ctrl+↑ / Ctrl+↓ (Cmd on macOS) are reported as ``move_intent(up)``; the
 dock adds the current selection.
+
+Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z are reported as ``undo_intent(is_undo)``.
+The tree claims them through ShortcutOverride (as Qt's text fields do), so
+while the focus is in the panel they undo the layer order even when a
+layer is being edited and QGIS's own Undo action holds the same shortcut.
 """
-from qgis.PyQt.QtCore import QModelIndex, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QModelIndex, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import QAbstractItemView, QTreeView
 
 from .compat import event_pos
@@ -23,6 +28,7 @@ from .tree_model import ROLE_ID, ROLE_TYPE
 class LayerOrderTree(QTreeView):
     expand_intent = pyqtSignal(str, bool)   # group id, expanded
     move_intent = pyqtSignal(bool)          # up
+    undo_intent = pyqtSignal(bool)          # True = undo, False = redo
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -55,7 +61,30 @@ class LayerOrderTree(QTreeView):
                 return
         super().mousePressEvent(e)
 
+    @staticmethod
+    def _undo_kind(e):
+        """True for undo, False for redo, None for any other key."""
+        ctrl = Qt.KeyboardModifier.ControlModifier
+        shift = Qt.KeyboardModifier.ShiftModifier
+        mods = e.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if e.key() == Qt.Key.Key_Z and mods == ctrl:
+            return True
+        if (e.key() == Qt.Key.Key_Y and mods == ctrl) or (e.key() == Qt.Key.Key_Z and mods == ctrl | shift):
+            return False
+        return None
+
+    def event(self, e):
+        # Claim undo/redo keys before application shortcuts (QGIS's Undo) see them
+        if e.type() == QEvent.Type.ShortcutOverride and self._undo_kind(e) is not None:
+            e.accept()
+            return True
+        return super().event(e)
+
     def keyPressEvent(self, e):
+        kind = self._undo_kind(e)
+        if kind is not None:
+            self.undo_intent.emit(kind)
+            return
         # Arrow keys carry KeypadModifier on macOS: ignore it
         mods = e.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
         if mods == Qt.KeyboardModifier.ControlModifier and e.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):

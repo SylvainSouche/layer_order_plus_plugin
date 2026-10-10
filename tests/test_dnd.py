@@ -412,3 +412,36 @@ def test_render_keeps_selection_and_expansion(mvc):
     mvc.model.rename_layer("A", "renamed")     # display-only change
     assert mvc.view.selected_ids() == ["B"]
     assert mvc.view.item_model.index_of("A").data() == "renamed"
+
+
+# ---------- undo keys while QGIS's own Undo holds Ctrl+Z ----------
+
+def test_undo_keys_in_panel_beat_an_enabled_app_undo_shortcut(mvc):
+    """A layer in edit mode enables QGIS's Undo (Ctrl+Z, window-wide). With
+    the focus in the panel, Ctrl+Z / Ctrl+Y must act on the layer order."""
+    from qgis.PyQt.QtGui import QKeySequence
+    from qgis.PyQt.QtWidgets import QMainWindow
+    try:
+        from qgis.PyQt.QtGui import QAction  # Qt 6
+    except ImportError:
+        from qgis.PyQt.QtWidgets import QAction  # Qt 5
+    window = QMainWindow()
+    window.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, mvc.view)
+    qgis_undo = QAction("Undo", window)
+    qgis_undo.setShortcut(QKeySequence("Ctrl+Z"))
+    fired = []
+    qgis_undo.triggered.connect(lambda: fired.append("qgis undo"))
+    window.addAction(qgis_undo)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+
+    mvc.load(["A", "B", "C"])
+    mvc.drop(["A"], "C", DROP_BELOW)                        # B C A
+    mvc.view.tree.setFocus()
+    QTest.keyClick(mvc.view.tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert _model_shape(mvc.model.get_root()) == ["A", "B", "C"]
+    assert fired == []
+    QTest.keyClick(mvc.view.tree, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    assert _model_shape(mvc.model.get_root()) == ["B", "C", "A"]
+    window.removeDockWidget(mvc.view)
+    window.deleteLater()

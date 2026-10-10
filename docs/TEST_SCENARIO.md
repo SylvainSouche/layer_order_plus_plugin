@@ -199,7 +199,8 @@ Reopen the baseline; do 4.1 then 4.3.
 | 8.2 | Click the map; **Ctrl+Z** | one more step (the baseline, centre red) |
 | 8.3 | **Ctrl+Y**, then **Ctrl+Shift+Z** | one step redone each (centre orange, then yellow) |
 | 8.4 | Edit → Undo layer order / Redo layer order | same as the keys; greyed out when there's nothing to undo or redo |
-| 8.5 | Toggle editing on layer A, move a vertex, Ctrl+Z | the vertex move is undone, **not** the layer order; then stop editing without saving |
+| 8.5 | Toggle editing on layer A, move a vertex; click the **map**, Ctrl+Z | the vertex move is undone, **not** the layer order |
+| 8.5b | Still editing A: make a move in ALO (e.g. ▲ on B), keep the focus in the **ALO panel**, Ctrl+Z | the **layer order** step is undone, the vertex edits stay; then stop editing without saving |
 | 8.6 | Type in the ALO "Rename group" dialog, or in the Python console, then Ctrl+Z | only the text is undone |
 | 8.7 | Collapse ABCD, then Ctrl+Z | ABCD stays collapsed (expansion isn't undone) |
 

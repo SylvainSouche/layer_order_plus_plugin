@@ -105,9 +105,17 @@ Group structure itself (creating, nesting) is only edited in ALO.
 
 ## 5. Undo / redo
 
-* **Edit → Undo / Redo layer order**, or **Ctrl+Z**, **Ctrl+Y** /
-  **Ctrl+Shift+Z** (when no layer is being edited — digitizing undo has
-  priority).
+* **Edit → Undo / Redo layer order** always works.
+* **Ctrl+Z**, **Ctrl+Y** / **Ctrl+Shift+Z** (⌘ on macOS) follow the focus:
+  * in the ALO panel, they always undo / redo the layer order, even while a
+    layer is being edited;
+  * elsewhere (map, Layers panel…), they undo the layer order unless a
+    layer is being edited, in which case QGIS's own undo (feature edits)
+    gets them.
+
+  QGIS's own undo only covers the edits of the layer being edited; a
+  plugin can't add its steps to it, so the layer order has its own
+  history.
 * Undoable: create / rename / delete group, moves and drops.
 * Not undoable (they belong to QGIS): adding/removing layers, visibility,
   changes made in QGIS's Layer Order panel. Undo never brings back a

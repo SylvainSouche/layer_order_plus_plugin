@@ -75,6 +75,7 @@ class ViewController(QObject):
         v.expand_requested.connect(self._on_expand)
         v.check_requested.connect(self._on_check)
         v.drop_requested.connect(self._on_drop)
+        v.undo_requested.connect(lambda undo: self.undo_stack.undo() if undo else self.undo_stack.redo())
         v.control_toggled.connect(self.control_requested)
         v.remove_empty_toggled.connect(self._model.set_remove_empty_groups)
         self._render_all()
