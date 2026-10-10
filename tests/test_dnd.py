@@ -412,3 +412,46 @@ def test_render_keeps_selection_and_expansion(mvc):
     mvc.model.rename_layer("A", "renamed")     # display-only change
     assert mvc.view.selected_ids() == ["B"]
     assert mvc.view.item_model.index_of("A").data() == "renamed"
+
+
+# ---------- Undo / Redo buttons ----------
+
+def test_undo_redo_buttons(mvc):
+    view = mvc.view
+    mvc.load(["A", "B", "C"])
+    assert not view.btn_undo.isEnabled() and not view.btn_redo.isEnabled()
+    mvc.drop(["A"], "C", DROP_BELOW)                         # B C A
+    assert view.btn_undo.isEnabled() and view.btn_undo.toolTip() == "Undo: Reorder layers"
+    view.btn_undo.click()
+    assert _model_shape(mvc.model.get_root()) == ["A", "B", "C"]
+    assert view.btn_redo.isEnabled() and not view.btn_undo.isEnabled()
+    view.btn_redo.click()
+    assert _model_shape(mvc.model.get_root()) == ["B", "C", "A"]
+    mvc.model.set_control_enabled(False)                     # greyed with the rest
+    assert not view.btn_undo.isEnabled()
+
+
+def test_ctrl_z_in_panel_is_not_handled(mvc):
+    """Undo is the buttons' job: Ctrl+Z stays QGIS's, focus or not."""
+    mvc.load(["A", "B", "C"])
+    mvc.drop(["A"], "C", DROP_BELOW)
+    mvc.view.tree.setFocus()
+    QTest.keyClick(mvc.view.tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert _model_shape(mvc.model.get_root()) == ["B", "C", "A"]
+
+
+def test_one_history_for_alo_and_native_panel_reorders(mvc):
+    """Interleaved ALO and QGIS-panel reorders undo in order, none lost."""
+    from advanced_layer_order.reconcile import reconcile_tree
+    mvc.load(["A", "B", "C", "D"])
+    mvc.vc._on_move_by_one(["B"], True)                    # ALO: B A C D
+    before = mvc.model.serialize()
+    mvc.model.replace_root(reconcile_tree(mvc.model.get_root(), list("BADC"), ["D"]))
+    mvc.vc.record_step(before, mvc.model.serialize(), "native")   # QGIS panel: B A D C
+    mvc.vc.undo_stack.undo()
+    assert _model_shape(mvc.model.get_root()) == ["B", "A", "C", "D"]
+    mvc.vc.undo_stack.undo()
+    assert _model_shape(mvc.model.get_root()) == ["A", "B", "C", "D"]
+    mvc.vc.undo_stack.redo()
+    mvc.vc.undo_stack.redo()
+    assert _model_shape(mvc.model.get_root()) == ["B", "A", "D", "C"]

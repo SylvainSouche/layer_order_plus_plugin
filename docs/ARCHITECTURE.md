@@ -43,7 +43,7 @@ knows all of them.
 
 | State | Owner | Written by | Undoable | Persisted in `tree_json` |
 |---|---|---|---|---|
-| Groups, nesting, order | Model | ViewController (user), Controller (reconcile, layers added/removed) | yes (user edits only) | yes |
+| Groups, nesting, order | Model | ViewController (user), Controller (reconcile, layers added/removed) | yes: ALO edits and QGIS-panel reorders (one linear history; the Controller reports `external_edit`, the ViewController records it) | yes |
 | Group expanded | Model | ViewController | no | yes |
 | `remove_empty_groups` | Model | ViewController | no | own project entry |
 | Layer set | QGIS | Controller | no | – |
@@ -147,7 +147,7 @@ selected blocks move together and nothing ever leaves its group.
   user scenario, QGIS Layer Order panel drags with the event loop running
   between its two steps, the native panel's display after toggling
   control, a reopened project staying unmodified, plugin load/unload
-  + keyboard undo, the manual-test data really showing the order on the
+  + the Undo / Redo buttons, the manual-test data really showing the order on the
   map, and a headless replay of `docs/TEST_SCENARIO.md` sections 1–7
   asserting each step's ALO / Native / Map expectations.
 * `make test-data` — regenerates the manual-test project

@@ -15,12 +15,12 @@ Nothing but this module knows all the pieces. The only cross-wiring is the
 ViewController's requests for QGIS-owned state (visibility, control of the
 rendering order), which go to the Controller.
 
-This module also integrates the undo stack with QGIS (Edit menu, Ctrl+Z
-when no layer is being edited).
+Undo / redo of the layer order is deliberately **not** integrated with
+QGIS (no Edit-menu entries, no Ctrl+Z): QGIS's undo is the edit buffer of
+the layer being edited, and sharing its keys or menu was ambiguous. The
+panel has its own Undo / Redo buttons.
 """
-from qgis.core import QgsProject
-from qgis.PyQt.QtCore import QEvent, QObject, Qt, QTimer
-from qgis.PyQt.QtGui import QAction
+from qgis.PyQt.QtCore import QObject, Qt, QTimer
 
 from .controller import LayerOrderController
 from .icons import icon_for_layer_id
@@ -43,9 +43,6 @@ class AdvancedLayerOrderPlugin(QObject):
         self.view_controller = None
         self.controller = None
         self._toggle_action = None
-        self._undo_actions = []
-        self._edit_menu = None
-        self._edit_separator = None
 
     # ==================================================================
     # Lifecycle
@@ -63,6 +60,7 @@ class AdvancedLayerOrderPlugin(QObject):
         vc.visibility_requested.connect(ctl.set_layers_visible)
         vc.control_requested.connect(ctl.set_control_enabled)
         ctl.project_loaded.connect(vc.reset_history)
+        ctl.external_edit.connect(vc.record_step)
 
         # Debug logging is infrastructure, not document state
         self.view.verbose_toggled.connect(self._set_verbose)
@@ -76,13 +74,10 @@ class AdvancedLayerOrderPlugin(QObject):
         self._toggle_action.setText(MENU)
         self.iface.addPluginToMenu(MENU, self._toggle_action)
 
-        self._setup_undo_integration()
-
         # Load whatever project is open once QGIS has finished starting up
         QTimer.singleShot(0, self.controller.load_project)
 
     def unload(self):
-        self._teardown_undo_integration()
         if self.controller is not None:
             self.controller.teardown()
         if self._toggle_action is not None:
@@ -96,90 +91,3 @@ class AdvancedLayerOrderPlugin(QObject):
     def _set_verbose(self, on: bool):
         set_verbose(on)
         self.view.render_verbose(on)
-
-    # ==================================================================
-    # Undo integration with QGIS
-    # ==================================================================
-    def _setup_undo_integration(self):
-        """Undo/redo for layer-order edits, without fighting QGIS's own undo.
-
-        * Menu: "Undo/Redo layer order" in the plugin menu and the Edit menu.
-          They carry no shortcut: a second Ctrl+Z shortcut next to QGIS's
-          own would make both ambiguous.
-        * Keyboard: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z key presses that nothing
-          else handled reach the main window, where an event filter applies
-          them to our stack — unless a layer is being edited, in which case
-          QGIS's digitizing undo has priority.
-        """
-        mw = self.iface.mainWindow()
-        stack = self.view_controller.undo_stack
-        act_undo = QAction("Undo layer order", mw)
-        act_undo.triggered.connect(stack.undo)
-        act_redo = QAction("Redo layer order", mw)
-        act_redo.triggered.connect(stack.redo)
-        self._undo_actions = [act_undo, act_redo]
-        for act in self._undo_actions:
-            self.iface.addPluginToMenu(MENU, act)
-        self._edit_menu = self._find_edit_menu()
-        if self._edit_menu is not None:
-            self._edit_separator = self._edit_menu.addSeparator()
-            self._edit_menu.addActions(self._undo_actions)
-
-        stack.canUndoChanged.connect(self._refresh_undo_actions)
-        stack.canRedoChanged.connect(self._refresh_undo_actions)
-        self._refresh_undo_actions()
-        mw.installEventFilter(self)
-
-    def _teardown_undo_integration(self):
-        self.iface.mainWindow().removeEventFilter(self)
-        stack = self.view_controller.undo_stack
-        stack.canUndoChanged.disconnect(self._refresh_undo_actions)
-        stack.canRedoChanged.disconnect(self._refresh_undo_actions)
-        for act in self._undo_actions:
-            self.iface.removePluginMenu(MENU, act)
-            if self._edit_menu is not None:
-                self._edit_menu.removeAction(act)
-            act.deleteLater()
-        if self._edit_menu is not None:
-            self._edit_menu.removeAction(self._edit_separator)
-        self._undo_actions = []
-        self._edit_menu = self._edit_separator = None
-
-    def _find_edit_menu(self):
-        """QGIS's Edit menu, by object name (locale-independent)."""
-        for action in self.iface.mainWindow().menuBar().actions():
-            menu = action.menu()
-            if menu is not None and menu.objectName() == "mEditMenu":
-                return menu
-        return None
-
-    def _refresh_undo_actions(self):
-        stack = self.view_controller.undo_stack
-        act_undo, act_redo = self._undo_actions
-        act_undo.setEnabled(stack.canUndo())
-        act_redo.setEnabled(stack.canRedo())
-
-    @staticmethod
-    def _is_editing_layer() -> bool:
-        """True if any layer is in edit mode (digitizing undo has priority)."""
-        return any(getattr(lyr, "isEditable", lambda: False)()
-                   for lyr in QgsProject.instance().mapLayers().values())
-
-    def eventFilter(self, obj, event):
-        if event.type() != QEvent.Type.KeyPress:
-            return False
-        ctrl = Qt.KeyboardModifier.ControlModifier
-        key, mods = event.key(), event.modifiers()
-        is_undo = key == Qt.Key.Key_Z and mods == ctrl
-        is_redo = ((key == Qt.Key.Key_Y and mods == ctrl)
-                   or (key == Qt.Key.Key_Z and mods == ctrl | Qt.KeyboardModifier.ShiftModifier))
-        if not (is_undo or is_redo) or self._is_editing_layer():
-            return False
-        stack = self.view_controller.undo_stack
-        if is_undo and stack.canUndo():
-            stack.undo()
-            return True
-        if is_redo and stack.canRedo():
-            stack.redo()
-            return True
-        return False

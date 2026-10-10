@@ -52,6 +52,7 @@ Layer Order panel; they always agree.
 | **Rename group** | Exactly one group selected. |
 | **Delete group** | One or more groups selected; their contents take their place. |
 | **Expand / Collapse group** | Context menu. |
+| **↶ Undo / ↷ Redo** | Toolbar. Undo / redo the last layer-order step (see section 5). |
 | **Move up / Move down** | Toolbar arrows, context menu, or **Ctrl+↑ / Ctrl+↓** (⌘ on macOS). Each selected item moves one step within its own group; adjacent selected items move together; an item already first/last in its group stays (use drag and drop to leave a group). One undo step. |
 | **Move to top / bottom** | Context menu: each selected item goes to the top/bottom of its own group, keeping their order. |
 
@@ -105,13 +106,19 @@ Group structure itself (creating, nesting) is only edited in ALO.
 
 ## 5. Undo / redo
 
-* **Edit → Undo / Redo layer order**, or **Ctrl+Z**, **Ctrl+Y** /
-  **Ctrl+Shift+Z** (when no layer is being edited — digitizing undo has
-  priority).
-* Undoable: create / rename / delete group, moves and drops.
-* Not undoable (they belong to QGIS): adding/removing layers, visibility,
-  changes made in QGIS's Layer Order panel. Undo never brings back a
-  deleted layer nor removes one that exists.
+* Use the **↶ Undo** and **↷ Redo** buttons of the ALO toolbar. Their
+  tooltip names the step ("Undo: Move up"); they are greyed out when there
+  is nothing to undo / redo.
+* ALO has no keyboard shortcut and no Edit-menu entry for undo: **Ctrl+Z**
+  (⌘Z) and **Edit → Undo** stay QGIS's own undo, which only covers the
+  feature edits of the layer being edited. A plugin can't add its steps
+  to that history, so the layer order has its own.
+* **One history for the layer order**: create / rename / delete group,
+  moves and drops in ALO, **and** reorders made in QGIS's own Layer Order
+  panel, in the order they happened. Undo never skips or loses one.
+* Not undoable (they belong to QGIS): adding / removing layers,
+  visibility. Undo never brings back a deleted layer nor removes one that
+  exists. Feature edits keep QGIS's own undo.
 * The history is cleared when a project is opened.
 
 ---

@@ -81,7 +81,7 @@ and D, and A covering B:
 
 | # | Action | Expected |
 |---|---|---|
-| 0.1 | Plugins → Manage and Install Plugins → **Install from ZIP**: `advanced_layer_order-<VERSION>.zip` | Installs without error; the "Advanced Layer Order" panel appears on the left; the Plugins → Advanced Layer Order menu has the panel toggle, "Undo layer order" and "Redo layer order"; the Edit menu ends with "Undo / Redo layer order"; Plugin Manager shows the version from `VERSION` |
+| 0.1 | Plugins → Manage and Install Plugins → **Install from ZIP**: `advanced_layer_order-<VERSION>.zip` | Installs without error; the "Advanced Layer Order" panel appears on the left; the Plugins → Advanced Layer Order menu has the panel toggle; QGIS's Edit menu is unchanged; Plugin Manager shows the version from `VERSION` |
 | 0.2 | Install the same zip again (upgrade) | Still one plugin entry and one panel |
 | 0.3 | Install the same zip in the other QGIS (3.44 or 4.x) | Installs and loads the same way; every section below behaves identically |
 
@@ -108,7 +108,7 @@ Open `tests/data/test.qgz`. The rows are cumulative.
 | 2.3 | Select AB and CD → **Create group** → "ABCD" | **baseline**: `ABCD[AB[A, B], CD[C, D]], E` | `A B C D E` | centre red |
 | 2.4 | **File → Save As** `~/lop-baseline.qgz` (outside the repository) | — | — | — |
 | 2.5 | Rename CD (toolbar) to "CD2", then delete CD2 (context menu) | `ABCD[AB[A, B], C, D], E` | `A B C D E` | unchanged |
-| 2.6 | Ctrl+Z twice | baseline, CD named CD again | `A B C D E` | unchanged |
+| 2.6 | **↶ Undo** twice | baseline, CD named CD again | `A B C D E` | unchanged |
 | 2.7 | Nothing selected → **Create group** | an empty "New group" at the bottom | unchanged | unchanged |
 | 2.8 | Collapse ABCD with its arrow; expand it by double-click; collapse with ←; expand with → | toggles each time; the state stays through later edits | — | — |
 
@@ -126,7 +126,7 @@ Reopen the baseline before each row.
 | 3.3 | Drag E **onto** AB (AB highlighted) | `ABCD[AB[A, B, E], CD[C, D]]` | `A B E C D` | centre red; D–E overlap **blue** |
 | 3.4 | Drag C into the **empty area** below the list | `ABCD[AB[A, B], CD[D]], E, C` | `A B D E C` | centre red; C–D overlap **green**; B–C overlap **orange** |
 | 3.5 | Drag E **onto** C | `ABCD[AB[A, B], CD[New group[C, E], D]]`, the new group expanded | `A B C E D` | centre red; D–E overlap **blue** |
-| 3.6 | Ctrl+Z | baseline | `A B C D E` | centre red |
+| 3.6 | **↶ Undo** | baseline | `A B C D E` | centre red |
 | 3.7 | Click D, Ctrl-click C (reverse order), drag both **above** A | `ABCD[AB[C, D, A, B], CD[]], E` (CD kept, empty) | `C D A B E` | centre **yellow** |
 | 3.8 | Drag ABCD onto AB | "no drop" cursor; nothing changes | unchanged | unchanged |
 | 3.9 | Scroll the list a little, collapse CD, then make any drop | the scroll position and CD's collapsed state don't change; the moved items are selected | — | — |
@@ -141,7 +141,7 @@ Reopen the baseline. The rows are cumulative.
 | 4.2 | **▲** again | unchanged: B is first in AB | `B A C D E` | orange |
 | 4.3 | Select group CD → **Ctrl+↑** (⌘↑ on macOS) | `ABCD[CD[C, D], AB[B, A]], E` | `C D B A E` | centre **yellow** |
 | 4.4 | Select C and D → **▼** | unchanged: the block fills CD | `C D B A E` | yellow |
-| 4.5 | Ctrl+Z twice | baseline | `A B C D E` | centre red |
+| 4.5 | **↶ Undo** twice | baseline | `A B C D E` | centre red |
 | 4.6 | Select E → right-click → **Move up** | `E, ABCD[AB[A, B], CD[C, D]]` | `E A B C D` | centre **blue** |
 | 4.7 | Clear the selection | ▲ and ▼ disabled | — | — |
 
@@ -181,7 +181,7 @@ Reopen the baseline. The rows are cumulative unless they say otherwise.
 |---|---|---|---|---|
 | 7.1 | Select C in the **Layers** panel; add layer F (Browser → `tests/data/test_layers.gpkg` → F, or Layer → Add Layer) | `ABCD[AB[A, B], CD[F, C, D]], E` | `A B F C D E` | purple F at the lower right, **above C** (the F–C overlap is purple; picture below) |
 | 7.2 | Rename F to "F2" in the Layers panel | renamed | renamed | — |
-| 7.3 | Select B → **▲**, then **Ctrl+Z** | after ▲: `AB[B, A]`; after Ctrl+Z: `ABCD[AB[A, B], CD[F2, C, D]], E`: the move is undone, **F2 stays** | `A B F2 C D E` | centre red |
+| 7.3 | Select B → **▲**, then **↶ Undo** | after ▲: `AB[B, A]`; after Undo: `ABCD[AB[A, B], CD[F2, C, D]], E`: the move is undone, **F2 stays** | `A B F2 C D E` | centre red |
 | 7.4 | Remove F2 | `ABCD[AB[A, B], CD[C, D]], E` | `A B C D E` | purple gone |
 | 7.5 | *Remove empty groups* **on**: remove C and D | `ABCD[AB[A, B]], E` (CD removed) | `A B E` | yellow and green gone |
 | 7.6 | Reopen the baseline; *Remove empty groups* **off**; remove C and D | `ABCD[AB[A, B], CD[]], E` (the empty CD is kept) | `A B E` | — |
@@ -189,26 +189,27 @@ Reopen the baseline. The rows are cumulative unless they say otherwise.
 
 ![F added above C](img/test-map-ABFCDE.png)
 
-## 8. Undo / redo and the keyboard
+## 8. Undo / redo
 
-Reopen the baseline; do 4.1 then 4.3.
+Reopen the baseline. The rows are cumulative.
 
 | # | Action | Expected |
 |---|---|---|
-| 8.1 | Focus on the ALO tree: **Ctrl+Z** | one step undone (state of 4.1, centre orange) |
-| 8.2 | Click the map; **Ctrl+Z** | one more step (the baseline, centre red) |
-| 8.3 | **Ctrl+Y**, then **Ctrl+Shift+Z** | one step redone each (centre orange, then yellow) |
-| 8.4 | Edit → Undo layer order / Redo layer order | same as the keys; greyed out when there's nothing to undo or redo |
-| 8.5 | Toggle editing on layer A, move a vertex, Ctrl+Z | the vertex move is undone, **not** the layer order; then stop editing without saving |
-| 8.6 | Type in the ALO "Rename group" dialog, or in the Python console, then Ctrl+Z | only the text is undone |
-| 8.7 | Collapse ABCD, then Ctrl+Z | ABCD stays collapsed (expansion isn't undone) |
+| 8.1 | (baseline just reopened) | ↶ and ↷ greyed out |
+| 8.2 | Do 4.1 and 4.3 (two moves); hover ↶ | tooltip "Undo: Move up" |
+| 8.3 | **↶ Undo** | one step undone (state of 4.1, centre orange); ↷ enabled, tooltip "Redo: Move up" |
+| 8.4 | **↶ Undo**, then **↷ Redo** twice | baseline (centre red), then centre orange, then yellow; ↷ greyed out at the end |
+| 8.5 | Focus in the ALO tree, press **Ctrl+Z** (⌘Z) and **Ctrl+Y** | nothing happens to the layer order (ALO has no undo shortcut) |
+| 8.6 | Toggle editing on layer A, move a vertex; focus in the **ALO panel**, Ctrl+Z | QGIS undoes the vertex move; the layer order doesn't change; then stop editing without saving |
+| 8.7 | Collapse ABCD, then **↶ Undo** | ABCD stays collapsed (expansion isn't undone) |
+| 8.8 | Reopen the baseline. ALO: ▲ on B. **Native** panel: drag D above C. Then **↶ Undo** twice, then **↷ Redo** twice | 1st Undo: D back below C (native `B A C D E`), tooltip was "Undo: Reorder in QGIS's Layer Order panel"; 2nd: B back below A (`A B C D E`, centre red); the two Redo replay both (`B A D C E`, centre orange) |
 
 ## 9. Saving, closing, switching projects, restarting
 
 | # | Action | Expected |
 |---|---|---|
 | 9.1 | Reopen the baseline; File → **Close** | the ALO panel **stays open**, empty; the Native panel is empty |
-| 9.2 | Open `~/lop-baseline.qgz` | ALO: the baseline tree, expansion as saved; Native `A B C D E`; centre red; the window title shows **no** "modified" mark; Edit → Undo layer order greyed out |
+| 9.2 | Open `~/lop-baseline.qgz` | ALO: the baseline tree, expansion as saved; Native `A B C D E`; centre red; the window title shows **no** "modified" mark; ↶ Undo greyed out |
 | 9.3 | Then open `tests/data/test.qgz` (discard changes) | ALO: `A, B, C, D, E` with **no** group from the previous project |
 | 9.4 | Tab the ALO panel behind the Layers panel, switch tabs, close and reopen a project | ALO is still in its tab |
 | 9.5 | Plugins → Advanced Layer Order → **Advanced Layer Order** | hides or shows the panel; the menu tick follows |
@@ -219,4 +220,4 @@ Reopen the baseline; do 4.1 then 4.3.
 | # | Action | Expected |
 |---|---|---|
 | 10.1 | ⌘↑ / ⌘↓ on a selected layer in ALO | moves it, as in section 4 |
-| 10.2 | ⌘Z / ⌘⇧Z | undo / redo layer order, as in section 8 |
+| 10.2 | ⌘Z with the focus in ALO | nothing happens to the layer order (as 8.5) |

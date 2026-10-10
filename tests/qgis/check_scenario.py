@@ -21,6 +21,27 @@ for order in ["ABCED", "ABECD", "AEBCD"]:
     check(r.qgis_order() == r.alo_order() == order, f"native drag to {order}")
 check(r.shape() == [("ABCD", [("AB", ["A", "E", "B"]), ("CD", ["C", "D"])])], f"after native {r.shape()}")
 
+# One linear history whichever panel reorders: ALO move, then a drag in
+# QGIS's Layer Order panel; Ctrl+Z undoes the native move first, then ALO's
+before_interleave = r.alo_order()
+r.view.move_by_one_requested.emit([lid["B"]], True)
+pump()
+after_alo = r.alo_order()
+moved = after_alo.replace("D", "")
+r.native_drag("D", moved[:1] + "D" + moved[1:])
+after_native = r.alo_order()
+check(after_native != after_alo, f"native drag applied: {after_alo} -> {after_native}")
+r.vc.undo_stack.undo()
+pump()
+check(r.alo_order() == after_alo == r.qgis_order(), f"1st undo reverts the native move: {r.alo_order()}")
+r.vc.undo_stack.undo()
+pump()
+check(r.alo_order() == before_interleave == r.qgis_order(), f"2nd undo reverts the ALO move: {r.alo_order()}")
+r.vc.undo_stack.redo()
+r.vc.undo_stack.redo()
+pump()
+check(r.alo_order() == after_native == r.qgis_order(), "redo replays both")
+
 r.view.drop_requested.emit([cd], "", DROP_END)
 pump()
 r.view.drop_requested.emit([cd], abcd, DROP_ON)

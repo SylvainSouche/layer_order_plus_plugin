@@ -51,6 +51,8 @@ model = LayerOrderModel()
 view = LayerOrderView()
 vc = ViewController(model, view)
 ctl = LayerOrderController(model, FakeIface())
+ctl.project_loaded.connect(vc.reset_history)
+ctl.external_edit.connect(vc.record_step)
 vc.visibility_requested.connect(ctl.set_layers_visible)
 vc.control_requested.connect(ctl.set_control_enabled)
 
@@ -192,8 +194,8 @@ for step, ids, up, tree, order, top in [
 ]:
     view.move_by_one_requested.emit([gid(i) if i in ("AB", "CD") else lid(i) for i in ids], up)
     expect(step, tree, order, top)
-vc.undo_stack.undo()
-vc.undo_stack.undo()
+view.btn_undo.click()
+view.btn_undo.click()
 expect("4.5", BASE, "A B C D E", "A")
 view.move_by_one_requested.emit([lid("E")], True)
 expect("4.6", "E, ABCD[AB[A, B], CD[C, D]]", "E A B C D", "E")
@@ -245,7 +247,7 @@ f_layer.setName("F2")
 expect("7.2", "ABCD[AB[A, B], CD[F2, C, D]], E", "A B F2 C D E")
 view.move_by_one_requested.emit([lid("B")], True)     # an ALO edit after F was added
 expect("7.3", "ABCD[AB[B, A], CD[F2, C, D]], E", "B A F2 C D E", "B")
-vc.undo_stack.undo()                                  # undoes the move only
+view.btn_undo.click()                                  # undoes the move only
 expect("7.3", "ABCD[AB[A, B], CD[F2, C, D]], E", "A B F2 C D E", "A")
 proj.removeMapLayer(f_layer.id())
 expect("7.4", BASE, "A B C D E", "A")

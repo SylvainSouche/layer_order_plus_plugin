@@ -75,9 +75,20 @@ class ViewController(QObject):
         v.expand_requested.connect(self._on_expand)
         v.check_requested.connect(self._on_check)
         v.drop_requested.connect(self._on_drop)
+        v.undo_requested.connect(lambda undo: self.undo_stack.undo() if undo else self.undo_stack.redo())
+        stack = self.undo_stack
+        for sig in (stack.canUndoChanged, stack.canRedoChanged, stack.undoTextChanged, stack.redoTextChanged):
+            sig.connect(self._render_undo_state)
         v.control_toggled.connect(self.control_requested)
         v.remove_empty_toggled.connect(self._model.set_remove_empty_groups)
         self._render_all()
+
+    def record_step(self, before: str, after: str, text: str) -> None:
+        """Add an already-applied change made outside the View (QGIS's Layer
+        Order panel) to the undo history, so the layer order has one linear
+        history whichever panel changed it."""
+        if before != after:
+            self.undo_stack.push(TreeStateCommand(self._model, before, after, text))
 
     def reset_history(self) -> None:
         """Forget undo history (new project)."""
@@ -106,8 +117,13 @@ class ViewController(QObject):
         elif event_type == EVENT_SETTING_CHANGED:
             self._render_setting(payload["key"], payload["value"])
 
+    def _render_undo_state(self, *_args) -> None:
+        s = self.undo_stack
+        self._view.render_undo_state(s.canUndo(), s.undoText(), s.canRedo(), s.redoText())
+
     def _render_all(self) -> None:
         self._render_tree()
+        self._render_undo_state()
         for key in (SETTING_CONTROL_ENABLED, SETTING_REMOVE_EMPTY_GROUPS):
             self._render_setting(key, self._model.get_setting(key))
 

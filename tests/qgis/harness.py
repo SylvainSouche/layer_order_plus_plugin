@@ -98,6 +98,7 @@ class Rig:
         self.vc.visibility_requested.connect(self.ctl.set_layers_visible)
         self.vc.control_requested.connect(self.ctl.set_control_enabled)
         self.ctl.project_loaded.connect(self.vc.reset_history)
+        self.ctl.external_edit.connect(self.vc.record_step)
         self.ctl.load_project()
         pump()
         self.ids = {lyr.name(): lyr.id() for lyr in self.project.mapLayers().values()}
