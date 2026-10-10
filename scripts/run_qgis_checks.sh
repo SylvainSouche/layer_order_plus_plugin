@@ -3,8 +3,9 @@
 # found on this Mac, or one script with --script FILE (first QGIS found).
 #
 # QGIS installs are found in $QGIS_APPS (space-separated .app paths) or in
-# /Applications/QGIS*.app and /Applications/MacPorts/QGIS*.app. Two kinds:
-#   * official builds, with their own Python (Contents/MacOS/python3.*);
+# /Applications/QGIS*.app and /Applications/MacPorts/QGIS*.app. Three kinds:
+#   * official QGIS 4 builds, with their own Python (Contents/MacOS/python3.*);
+#   * official QGIS 3 builds (Contents/MacOS/bin/python3.*, e.g. 3.40 / 3.9);
 #   * MacPorts builds, whose bindings run with MacPorts' Python.
 set -euo pipefail
 
@@ -27,6 +28,10 @@ use_qgis() {
         local V; V="$(basename "$PY")"
         export PYTHONHOME="$C/Resources" QGIS_PREFIX_PATH="$C/MacOS"
         export PYTHONPATH="$C/Resources/$V:$C/Resources/$V/site-packages:$C/Resources/$V/lib-dynload"
+    elif ls "$C"/MacOS/bin/python3.* >/dev/null 2>&1 && [ -d "$C/Resources/python/qgis" ]; then
+        # official QGIS 3.x build: Python in MacOS/bin, bindings in Resources
+        PY="$(ls "$C"/MacOS/bin/python3.* | grep -E 'python3\.[0-9]+$' | head -1)"
+        export PYTHONPATH="$C/Resources/python"
     elif [ -d "$C/Resources/python/qgis" ]; then               # MacPorts build
         # The bindings don't name their Python: take the one that loads them
         export PYTHONPATH="$C/Resources/python"
