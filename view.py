@@ -17,6 +17,7 @@ Parts: ``LayerOrderItemModel`` (tree_model.py) presents the rendered tree
 and turns drops / checkbox clicks into intents; ``LayerOrderTree``
 (tree_view.py) displays it and reports expand/collapse.
 """
+from __future__ import annotations
 
 from qgis.PyQt.QtCore import QItemSelectionModel, QSize, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (

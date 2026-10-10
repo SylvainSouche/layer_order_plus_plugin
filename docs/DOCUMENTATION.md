@@ -1,6 +1,6 @@
 # Advanced Layer Order — User guide
 
-**QGIS 4.x** · version in [`VERSION`](../VERSION) · developer documentation:
+**QGIS 3.40, 3.44 and 4.x** · version in [`VERSION`](../VERSION) · developer documentation:
 [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ---
@@ -148,6 +148,6 @@ Errors are always logged there.
 
 * **Original plugin:** *Layer Order Plus* 1.0.0 (QGIS 3), Samuel Kultz —
   https://github.com/samkultz/layer_order_plus_plugin
-* **Advanced Layer Order** (QGIS 4 continuation): Sylvain Souche —
+* **Advanced Layer Order** (continuation for QGIS 3.40+ and 4): Sylvain Souche —
   https://github.com/SylvainSouche/qgis_advanced_layer_order
 * **License:** MIT — see [`LICENSE`](../LICENSE)

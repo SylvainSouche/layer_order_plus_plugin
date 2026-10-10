@@ -69,7 +69,8 @@ and D, and A covering B:
 
 ### Setup
 
-1. Have QGIS 4 with the **Layers**, **Layer Order** and **Advanced Layer Order**
+1. Have QGIS 4 — and repeat the plan on QGIS 3.44 — with the **Layers**,
+   **Layer Order** and **Advanced Layer Order**
    panels visible, and **View → Panels → Log Messages**, tab
    **AdvancedLayerOrder**, open. Any red message there is a failure.
 2. Tick *Verbose logging* in ALO only to investigate a failure.
@@ -82,7 +83,7 @@ and D, and A covering B:
 |---|---|---|
 | 0.1 | Plugins → Manage and Install Plugins → **Install from ZIP**: `advanced_layer_order-<VERSION>.zip` | Installs without error; the "Advanced Layer Order" panel appears on the left; the Plugins → Advanced Layer Order menu has the panel toggle, "Undo layer order" and "Redo layer order"; the Edit menu ends with "Undo / Redo layer order"; Plugin Manager shows the version from `VERSION` |
 | 0.2 | Install the same zip again (upgrade) | Still one plugin entry and one panel |
-| 0.3 | *(If you also run QGIS 3)* try the zip in QGIS 3 | Refused or listed as incompatible; nothing loads, no Python error |
+| 0.3 | Install the same zip in the other QGIS (3.44 or 4.x) | Installs and loads the same way; every section below behaves identically |
 
 ## 1. Opening the project and control
 

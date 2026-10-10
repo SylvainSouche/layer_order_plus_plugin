@@ -75,9 +75,12 @@ def check_metadata(expected_version: str) -> None:
         value = g.get(key, "").strip()
         if value and not re.fullmatch(r"\d+\.\d+(\.\d+)?", value):
             err(f"{key} must be dotted numbers, got {value!r}")
-    major_min = int((g.get("qgisMinimumVersion", "0").split(".") or ["0"])[0] or 0)
-    if major_min < 4:
-        err("qgisMinimumVersion must be >= 4.0: the code is Qt6/PyQt6-only")
+    def as_tuple(v):
+        return tuple(int(x) for x in v.split(".")[:2]) if re.fullmatch(r"\d+\.\d+(\.\d+)?", v) else (0, 0)
+    if as_tuple(g.get("qgisMinimumVersion", "0").strip()) < (3, 40):
+        err("qgisMinimumVersion must be >= 3.40 (oldest QGIS whose APIs the plugin uses)")
+    if as_tuple(g.get("qgisMaximumVersion", "0").strip()) < (4, 99):
+        err("qgisMaximumVersion must be >= 4.99 to be listed for QGIS 4")
     if not (ROOT / "LICENSE").is_file():
         err("LICENSE (no extension) is mandatory for plugins.qgis.org")
     if "plugin" in g.get("name", "").lower():

@@ -2,6 +2,7 @@
 
 These tests run WITHOUT QGIS installed. We provide stub `qgis.*` modules so
 that `from qgis.PyQt.QtCore import Qt` and similar imports resolve to PyQt6
+(QGIS 4) or, with QT_API=pyqt5, to PyQt5 (QGIS 3.40 / 3.44)
 directly, and `qgis.core` symbols (QgsProject, QgsMessageLog, Qgis, etc.)
 resolve to lightweight mocks.
 
@@ -13,9 +14,11 @@ import types
 
 import pytest
 
-
 # ----------------------------------------------------------------------
-# Build a fake `qgis` package that aliases qgis.PyQt -> PyQt6 and provides
+QT_API = "PyQt5" if os.environ.get("QT_API", "").lower() == "pyqt5" else "PyQt6"
+
+
+# Build a fake `qgis` package that aliases qgis.PyQt -> PyQt5/6 and provides
 # minimal qgis.core / qgis.gui stubs. This lets the plugin modules import
 # without a real QGIS installation.
 # ----------------------------------------------------------------------
@@ -28,14 +31,14 @@ def _install_qgis_stubs():
     qgis_pkg.__path__ = []
     sys.modules["qgis"] = qgis_pkg
 
-    # qgis.PyQt — alias to the real PyQt6
+    # qgis.PyQt — alias to the real PyQt5 / PyQt6
     pyqt_pkg = types.ModuleType("qgis.PyQt")
     pyqt_pkg.__path__ = []
     sys.modules["qgis.PyQt"] = pyqt_pkg
 
-    # Re-export PyQt6 submodules under qgis.PyQt
-    for sub in ("QtCore", "QtGui", "QtWidgets"):
-        real = __import__(f"PyQt6.{sub}", fromlist=[sub])
+    # Re-export the PyQt submodules under qgis.PyQt
+    for sub in ("QtCore", "QtGui", "QtWidgets", "QtTest"):
+        real = __import__(f"{QT_API}.{sub}", fromlist=[sub])
         sys.modules[f"qgis.PyQt.{sub}"] = real
         setattr(pyqt_pkg, sub, real)
 
@@ -85,18 +88,18 @@ def _install_qgis_stubs():
     class _QgsApplication:
         @staticmethod
         def getThemeIcon(name):
-            from PyQt6.QtGui import QIcon
+            from qgis.PyQt.QtGui import QIcon
             return QIcon()
     qgis_core.QgsApplication = _QgsApplication
 
     class _QgsIconUtils:
         @staticmethod
         def iconForLayer(layer):
-            from PyQt6.QtGui import QIcon
+            from qgis.PyQt.QtGui import QIcon
             return QIcon()
         @staticmethod
         def iconForWkbType(wkb):
-            from PyQt6.QtGui import QIcon
+            from qgis.PyQt.QtGui import QIcon
             return QIcon()
     qgis_core.QgsIconUtils = _QgsIconUtils
 
@@ -205,7 +208,7 @@ _register_plugin_package()
 @pytest.fixture
 def qapp():
     """Provide a QApplication with offscreen platform so QTreeWidget works headless."""
-    from PyQt6.QtWidgets import QApplication
+    from qgis.PyQt.QtWidgets import QApplication
     app = QApplication.instance()
     if app is None:
         app = QApplication([])

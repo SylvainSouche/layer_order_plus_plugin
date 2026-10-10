@@ -17,13 +17,16 @@ Model, and it does exactly two things:
 It never touches QGIS and never reads state back from the View: intents
 carry their data.
 """
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from contextlib import contextmanager
 
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import QIcon, QUndoStack
+from qgis.PyQt.QtGui import QIcon
 
+from .compat import QUndoStack
 from .model import (
     EVENT_EXPANDED_CHANGED,
     EVENT_GROUP_RENAMED,

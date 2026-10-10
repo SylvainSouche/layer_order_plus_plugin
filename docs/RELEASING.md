@@ -6,7 +6,7 @@
    * bump [`VERSION`](../VERSION) (`make sync` copies it into `metadata.txt`);
    * describe the change in [`VERSION.md`](../VERSION.md);
    * touch the `changelog` in `metadata.txt` only for a new macro version
-     (`1.3.x`, `1.4.x`, …).
+     (e.g. `1.3.x`).
 2. Run everything and build:
 
    ```bash
@@ -14,8 +14,12 @@
    make zip        # dist/advanced_layer_order-<VERSION>.zip
    ```
 
+   `make qgis-test` runs every check under each QGIS installed on the Mac
+   (official QGIS 4 app, MacPorts QGIS 3.44). The supported range is
+   3.40 – 4.x; 3.40 and 4.0 can't be installed here (MacPorts dropped
+   `qgis3-ltr`), so they rely on the shared code paths of 3.44 / 4.2.
 3. Run the manual acceptance test ([`TEST_SCENARIO.md`](TEST_SCENARIO.md))
-   with that zip.
+   with that zip, on QGIS 4 and on QGIS 3.44.
 4. PR into `main`, merge, then tag `main`: `git tag v<VERSION>` and push
    the tag. Optionally publish a GitHub release with the zip attached.
 5. Upload the zip on plugins.qgis.org: log in with your OSGeo ID → the
@@ -26,7 +30,7 @@
 ## Identity
 
 Advanced Layer Order is published as a **new plugin** on
-plugins.qgis.org: the QGIS 4 continuation of *Layer Order Plus* by Samuel
+plugins.qgis.org: the continuation of *Layer Order Plus* by Samuel
 Kultz, with his agreement. His entry (`layer_order_plus`, QGIS 3) stays
 his and untouched.
 

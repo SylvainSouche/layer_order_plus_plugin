@@ -1,6 +1,6 @@
 [tool.ruff]
 line-length = 110
-target-version = "py312"           # QGIS 4 ships Python 3.12
+target-version = "py39"            # QGIS 3.40+ may ship Python 3.9; QGIS 4 ships 3.12
 extend-exclude = ["dist", "tests/vendor"]
 
 [tool.ruff.lint]
