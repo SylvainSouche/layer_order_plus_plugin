@@ -150,9 +150,19 @@ selected blocks move together and nothing ever leaves its group.
   + the Undo / Redo buttons, the manual-test data really showing the order on the
   map, and a headless replay of `docs/TEST_SCENARIO.md` sections 1–7
   asserting each step's ALO / Native / Map expectations.
+  `check_no_leaks.py` loads/unloads the plugin and reopens the project
+  repeatedly and asserts nothing is left behind (objects, widgets,
+  QGIS connections, memory). Never connect a lambda or closure that
+  captures `self` to a Qt signal: PyQt holds it from C++ and the object
+  is never freed — connect bound methods or signals.
 * `make test-data` — regenerates the manual-test project
   (`tests/data/make_test_project.py`).
 * `make lint` — ruff.
+* `make bench` — time and memory against the number of layers
+  (`tests/perf/`); results and complexity per operation in
+  [PERFORMANCE.md](PERFORMANCE.md). `tests/test_scaling.py` guards the
+  invariants the bounds rely on (the Model's id index never stale, batch
+  edits equal one-by-one edits).
 
 ## QGIS 3 and QGIS 4
 
