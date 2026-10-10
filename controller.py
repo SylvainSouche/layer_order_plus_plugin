@@ -58,6 +58,10 @@ class LayerOrderController(QObject):
     """Keeps the Model and QGIS in sync. See module docstring."""
 
     project_loaded = pyqtSignal()   # a project's document is now in the Model
+    # A reorder made outside the plugin (QGIS's Layer Order panel) changed
+    # the document: (before_json, after_json, description). Wired to the
+    # ViewController so it becomes a step of the layer-order history.
+    external_edit = pyqtSignal(str, str, str)
 
     def __init__(self, model: LayerOrderModel, iface, parent=None):
         super().__init__(parent)
@@ -348,7 +352,9 @@ class LayerOrderController(QObject):
             log.debug("reconcile skipped: QGIS order is not a permutation of ALO layers")
             return
         log.info("reconciled with the QGIS order (dragged: %s)", sorted(dragged))
+        before = self._model.serialize()
         self._model.replace_root(new_root)
+        self.external_edit.emit(before, self._model.serialize(), "Reorder in QGIS's Layer Order panel")
 
     def _apply_custom_order(self) -> None:
         """Write the Model's flattened order to QGIS's custom layer order."""

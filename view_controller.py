@@ -80,6 +80,13 @@ class ViewController(QObject):
         v.remove_empty_toggled.connect(self._model.set_remove_empty_groups)
         self._render_all()
 
+    def record_step(self, before: str, after: str, text: str) -> None:
+        """Add an already-applied change made outside the View (QGIS's Layer
+        Order panel) to the undo history, so the layer order has one linear
+        history whichever panel changed it."""
+        if before != after:
+            self.undo_stack.push(TreeStateCommand(self._model, before, after, text))
+
     def reset_history(self) -> None:
         """Forget undo history (new project)."""
         self.undo_stack.clear()

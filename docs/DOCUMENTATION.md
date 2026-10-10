@@ -116,10 +116,12 @@ Group structure itself (creating, nesting) is only edited in ALO.
   QGIS's own undo only covers the edits of the layer being edited; a
   plugin can't add its steps to it, so the layer order has its own
   history.
-* Undoable: create / rename / delete group, moves and drops.
-* Not undoable (they belong to QGIS): adding/removing layers, visibility,
-  changes made in QGIS's Layer Order panel. Undo never brings back a
-  deleted layer nor removes one that exists.
+* **One history for the layer order**: create / rename / delete group,
+  moves and drops in ALO, **and** reorders made in QGIS's own Layer Order
+  panel, in the order they happened. Undo never skips or loses one.
+* Not undoable (they belong to QGIS): adding / removing layers,
+  visibility. Undo never brings back a deleted layer nor removes one that
+  exists. Feature edits keep QGIS's own undo (see above).
 * The history is cleared when a project is opened.
 
 ---

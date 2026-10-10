@@ -51,6 +51,8 @@ model = LayerOrderModel()
 view = LayerOrderView()
 vc = ViewController(model, view)
 ctl = LayerOrderController(model, FakeIface())
+ctl.project_loaded.connect(vc.reset_history)
+ctl.external_edit.connect(vc.record_step)
 vc.visibility_requested.connect(ctl.set_layers_visible)
 vc.control_requested.connect(ctl.set_control_enabled)
 

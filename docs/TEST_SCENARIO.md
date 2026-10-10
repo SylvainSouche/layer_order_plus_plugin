@@ -203,6 +203,7 @@ Reopen the baseline; do 4.1 then 4.3.
 | 8.5b | Still editing A: make a move in ALO (e.g. ▲ on B), keep the focus in the **ALO panel**, Ctrl+Z | the **layer order** step is undone, the vertex edits stay; then stop editing without saving |
 | 8.6 | Type in the ALO "Rename group" dialog, or in the Python console, then Ctrl+Z | only the text is undone |
 | 8.7 | Collapse ABCD, then Ctrl+Z | ABCD stays collapsed (expansion isn't undone) |
+| 8.8 | Reopen the baseline. ALO: ▲ on B. **Native** panel: drag D above C. Then Ctrl+Z twice in ALO, then Ctrl+Y twice | 1st Ctrl+Z: D back below C (native `B A C D E`); 2nd: B back below A (`A B C D E`, centre red); the two Ctrl+Y replay both (`B A D C E`, centre orange) |
 
 ## 9. Saving, closing, switching projects, restarting
 

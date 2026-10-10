@@ -445,3 +445,20 @@ def test_undo_keys_in_panel_beat_an_enabled_app_undo_shortcut(mvc):
     assert _model_shape(mvc.model.get_root()) == ["B", "C", "A"]
     window.removeDockWidget(mvc.view)
     window.deleteLater()
+
+
+def test_one_history_for_alo_and_native_panel_reorders(mvc):
+    """Interleaved ALO and QGIS-panel reorders undo in order, none lost."""
+    from advanced_layer_order.reconcile import reconcile_tree
+    mvc.load(["A", "B", "C", "D"])
+    mvc.vc._on_move_by_one(["B"], True)                    # ALO: B A C D
+    before = mvc.model.serialize()
+    mvc.model.replace_root(reconcile_tree(mvc.model.get_root(), list("BADC"), ["D"]))
+    mvc.vc.record_step(before, mvc.model.serialize(), "native")   # QGIS panel: B A D C
+    mvc.vc.undo_stack.undo()
+    assert _model_shape(mvc.model.get_root()) == ["B", "A", "C", "D"]
+    mvc.vc.undo_stack.undo()
+    assert _model_shape(mvc.model.get_root()) == ["A", "B", "C", "D"]
+    mvc.vc.undo_stack.redo()
+    mvc.vc.undo_stack.redo()
+    assert _model_shape(mvc.model.get_root()) == ["B", "A", "D", "C"]

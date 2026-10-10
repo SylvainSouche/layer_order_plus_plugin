@@ -63,6 +63,7 @@ class AdvancedLayerOrderPlugin(QObject):
         vc.visibility_requested.connect(ctl.set_layers_visible)
         vc.control_requested.connect(ctl.set_control_enabled)
         ctl.project_loaded.connect(vc.reset_history)
+        ctl.external_edit.connect(vc.record_step)
 
         # Debug logging is infrastructure, not document state
         self.view.verbose_toggled.connect(self._set_verbose)

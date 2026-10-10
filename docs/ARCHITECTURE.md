@@ -43,7 +43,7 @@ knows all of them.
 
 | State | Owner | Written by | Undoable | Persisted in `tree_json` |
 |---|---|---|---|---|
-| Groups, nesting, order | Model | ViewController (user), Controller (reconcile, layers added/removed) | yes (user edits only) | yes |
+| Groups, nesting, order | Model | ViewController (user), Controller (reconcile, layers added/removed) | yes: ALO edits and QGIS-panel reorders (one linear history; the Controller reports `external_edit`, the ViewController records it) | yes |
 | Group expanded | Model | ViewController | no | yes |
 | `remove_empty_groups` | Model | ViewController | no | own project entry |
 | Layer set | QGIS | Controller | no | – |
