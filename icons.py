@@ -42,6 +42,14 @@ def icon_move_down() -> QIcon:
     return bundled_icon("move_down.svg")
 
 
+def icon_undo() -> QIcon:
+    return bundled_icon("undo.svg")
+
+
+def icon_redo() -> QIcon:
+    return bundled_icon("redo.svg")
+
+
 def icon_for_layer(layer) -> QIcon:
     """QGIS's own icon for the layer type/geometry; generic icon if None."""
     if layer is not None:

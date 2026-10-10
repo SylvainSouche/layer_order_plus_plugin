@@ -1,5 +1,6 @@
-"""Plugin load/unload (twice) through classFactory, Edit-menu integration,
-and keyboard undo/redo: one key press, one step."""
+"""Plugin load/unload (twice) through classFactory; the panel's Undo / Redo
+buttons; QGIS's Edit menu and Ctrl+Z left to QGIS; dock survives project
+changes."""
 import importlib
 
 from harness import FakeIface, check, finish, open_test_project, pump
@@ -7,7 +8,7 @@ from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QAction, QKeySequence
 from qgis.PyQt.QtTest import QTest
-from qgis.PyQt.QtWidgets import QDockWidget, QLineEdit
+from qgis.PyQt.QtWidgets import QDockWidget
 
 open_test_project()
 package = importlib.import_module("advanced_layer_order")
@@ -18,26 +19,29 @@ for _ in range(2):
     plugin.initGui()
     pump()
     check(plugin.view.item_model.rowCount() == 5, "tree populated")
-    check(len(edit_menu.actions()) == 3, "Edit menu: separator + undo + redo")
+    check(len(edit_menu.actions()) == 0, "QGIS's Edit menu left alone")
     if not plugin.model.get_control_enabled():
         plugin.view.chk_control.click()
         pump()
     stack = plugin.view_controller.undo_stack
+    view = plugin.view
+    check(not view.btn_undo.isEnabled() and not view.btn_redo.isEnabled(), "buttons idle on a fresh project")
     ids = plugin.model.get_flattened_layer_ids()
     plugin.view_controller.handle_drop([ids[0]], "", "end")
     plugin.view_controller.handle_drop([ids[1]], "", "end")
     pump()
     before = stack.index()
-    iface.mw.show()
-    plugin.view.tree.setFocus()
-    QTest.keyClick(plugin.view.tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    check(view.btn_undo.isEnabled() and view.btn_undo.toolTip() == "Undo: Reorder layers",
+          "Undo button names the step")
+    view.btn_undo.click()
     pump()
-    check(stack.index() == before - 1, "Ctrl+Z undoes exactly one step")
-    QTest.keyClick(plugin.view.tree, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    check(stack.index() == before - 1 and view.btn_redo.isEnabled(), "Undo button: one step")
+    view.btn_redo.click()
     pump()
-    check(stack.index() == before, "Ctrl+Y redoes exactly one step")
-    # A layer in edit mode enables QGIS's own Undo (Ctrl+Z). Focus in the
-    # panel: Ctrl+Z undoes the layer order; focus elsewhere: QGIS's undo.
+    check(stack.index() == before and not view.btn_redo.isEnabled(), "Redo button: one step")
+
+    # Ctrl+Z is QGIS's, even with the focus in the panel (a layer being
+    # edited enables QGIS's own Undo)
     editing = QgsVectorLayer("Point?crs=EPSG:4326", "scratch", "memory")
     QgsProject.instance().addMapLayer(editing)
     editing.startEditing()
@@ -46,19 +50,14 @@ for _ in range(2):
     qgis_fired = []
     qgis_undo.triggered.connect(lambda _=False, fired=qgis_fired: fired.append(True))
     iface.mw.addAction(qgis_undo)
-    plugin.view_controller.handle_drop([ids[0]], "", "end")
+    iface.mw.show()
+    QTest.qWaitForWindowExposed(iface.mw)
+    iface.mw.activateWindow()                  # window shortcuts need the active window
+    view.tree.setFocus()
     pump()
-    before = stack.index()
-    plugin.view.tree.setFocus()
-    QTest.keyClick(plugin.view.tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(view.tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
     pump()
-    check(stack.index() == before - 1 and not qgis_fired, "Ctrl+Z in the panel while a layer is edited")
-    other = QLineEdit(iface.mw)
-    other.setReadOnly(True)                                # no text undo of its own
-    other.setFocus()
-    QTest.keyClick(other, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-    pump()
-    check(qgis_fired and stack.index() == before - 1, "Ctrl+Z elsewhere goes to QGIS's undo while editing")
+    check(qgis_fired and stack.index() == before, "Ctrl+Z goes to QGIS, the layer order is untouched")
     iface.mw.removeAction(qgis_undo)
     editing.rollBack()
     QgsProject.instance().removeMapLayer(editing.id())
@@ -81,5 +80,5 @@ for _ in range(2):
     iface.mw.removeDockWidget(other)
     plugin.unload()
     pump()
-    check(len(edit_menu.actions()) == 0, "Edit menu cleaned on unload")
+    check(len(edit_menu.actions()) == 0, "Edit menu still untouched after unload")
 finish()

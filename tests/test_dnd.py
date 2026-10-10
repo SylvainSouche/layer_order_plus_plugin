@@ -414,37 +414,30 @@ def test_render_keeps_selection_and_expansion(mvc):
     assert mvc.view.item_model.index_of("A").data() == "renamed"
 
 
-# ---------- undo keys while QGIS's own Undo holds Ctrl+Z ----------
+# ---------- Undo / Redo buttons ----------
 
-def test_undo_keys_in_panel_beat_an_enabled_app_undo_shortcut(mvc):
-    """A layer in edit mode enables QGIS's Undo (Ctrl+Z, window-wide). With
-    the focus in the panel, Ctrl+Z / Ctrl+Y must act on the layer order."""
-    from qgis.PyQt.QtGui import QKeySequence
-    from qgis.PyQt.QtWidgets import QMainWindow
-    try:
-        from qgis.PyQt.QtGui import QAction  # Qt 6
-    except ImportError:
-        from qgis.PyQt.QtWidgets import QAction  # Qt 5
-    window = QMainWindow()
-    window.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, mvc.view)
-    qgis_undo = QAction("Undo", window)
-    qgis_undo.setShortcut(QKeySequence("Ctrl+Z"))
-    fired = []
-    qgis_undo.triggered.connect(lambda: fired.append("qgis undo"))
-    window.addAction(qgis_undo)
-    window.show()
-    QTest.qWaitForWindowExposed(window)
-
+def test_undo_redo_buttons(mvc):
+    view = mvc.view
     mvc.load(["A", "B", "C"])
-    mvc.drop(["A"], "C", DROP_BELOW)                        # B C A
+    assert not view.btn_undo.isEnabled() and not view.btn_redo.isEnabled()
+    mvc.drop(["A"], "C", DROP_BELOW)                         # B C A
+    assert view.btn_undo.isEnabled() and view.btn_undo.toolTip() == "Undo: Reorder layers"
+    view.btn_undo.click()
+    assert _model_shape(mvc.model.get_root()) == ["A", "B", "C"]
+    assert view.btn_redo.isEnabled() and not view.btn_undo.isEnabled()
+    view.btn_redo.click()
+    assert _model_shape(mvc.model.get_root()) == ["B", "C", "A"]
+    mvc.model.set_control_enabled(False)                     # greyed with the rest
+    assert not view.btn_undo.isEnabled()
+
+
+def test_ctrl_z_in_panel_is_not_handled(mvc):
+    """Undo is the buttons' job: Ctrl+Z stays QGIS's, focus or not."""
+    mvc.load(["A", "B", "C"])
+    mvc.drop(["A"], "C", DROP_BELOW)
     mvc.view.tree.setFocus()
     QTest.keyClick(mvc.view.tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-    assert _model_shape(mvc.model.get_root()) == ["A", "B", "C"]
-    assert fired == []
-    QTest.keyClick(mvc.view.tree, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
     assert _model_shape(mvc.model.get_root()) == ["B", "C", "A"]
-    window.removeDockWidget(mvc.view)
-    window.deleteLater()
 
 
 def test_one_history_for_alo_and_native_panel_reorders(mvc):

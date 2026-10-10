@@ -20,8 +20,9 @@ list draws on top of the map.
 * Two-way sync with QGIS: Layers-panel visibility, layers added / removed /
   renamed, the "Control rendering order" switch, and moves made in QGIS's
   own Layer Order panel (groups are kept consistent).
-* Undo / redo (Edit menu, Ctrl+Z / Ctrl+Y) that never fights QGIS:
-  digitizing undo keeps priority, layers QGIS owns are never undone.
+* Undo / redo buttons in the panel, one history for the layer order
+  (including reorders made in QGIS's own Layer Order panel), separate from QGIS's undo
+  (Ctrl+Z stays QGIS's); layers QGIS owns are never undone.
 * Saved with the project.
 
 User guide: [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md).

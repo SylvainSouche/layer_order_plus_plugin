@@ -147,7 +147,7 @@ selected blocks move together and nothing ever leaves its group.
   user scenario, QGIS Layer Order panel drags with the event loop running
   between its two steps, the native panel's display after toggling
   control, a reopened project staying unmodified, plugin load/unload
-  + keyboard undo, the manual-test data really showing the order on the
+  + the Undo / Redo buttons, the manual-test data really showing the order on the
   map, and a headless replay of `docs/TEST_SCENARIO.md` sections 1–7
   asserting each step's ALO / Native / Map expectations.
 * `make test-data` — regenerates the manual-test project

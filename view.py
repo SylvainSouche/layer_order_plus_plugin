@@ -31,7 +31,15 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from .icons import icon_add_group, icon_move_down, icon_move_up, icon_remove_group, icon_rename_group
+from .icons import (
+    icon_add_group,
+    icon_move_down,
+    icon_move_up,
+    icon_redo,
+    icon_remove_group,
+    icon_rename_group,
+    icon_undo,
+)
 from .model import TYPE_GROUP
 from .tree_model import ROLE_ID, ROLE_TYPE, LayerOrderItemModel
 from .tree_view import LayerOrderTree
@@ -68,7 +76,7 @@ class LayerOrderView(QDockWidget):
     control_toggled = pyqtSignal(bool)
     remove_empty_toggled = pyqtSignal(bool)
     verbose_toggled = pyqtSignal(bool)
-    undo_requested = pyqtSignal(bool)                    # True = undo, False = redo (keys in the panel)
+    undo_requested = pyqtSignal(bool)                    # True = undo, False = redo (toolbar buttons)
 
     def __init__(self, parent=None):
         super().__init__("Advanced Layer Order", parent)
@@ -107,6 +115,12 @@ class LayerOrderView(QDockWidget):
         head.addSpacing(8)
         head.addWidget(self.btn_move_up)
         head.addWidget(self.btn_move_down)
+        head.addSpacing(8)
+        self.btn_undo = tool_button(icon_undo(), "Undo")
+        self.btn_redo = tool_button(icon_redo(), "Redo")
+        head.addWidget(self.btn_undo)
+        head.addWidget(self.btn_redo)
+        self._undo_state = (False, "", False, "")
         head.addStretch(1)
 
         self.tree = LayerOrderTree()
@@ -149,7 +163,8 @@ class LayerOrderView(QDockWidget):
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.selectionModel().selectionChanged.connect(self._update_group_buttons)
         self.tree.expand_intent.connect(lambda gid, on: self.expand_requested.emit([gid], on))
-        self.tree.undo_intent.connect(self.undo_requested)
+        self.btn_undo.clicked.connect(lambda: self.undo_requested.emit(True))
+        self.btn_redo.clicked.connect(lambda: self.undo_requested.emit(False))
         self.item_model.drop_intent.connect(self.drop_requested)
         self.item_model.check_intent.connect(self.check_requested)
 
@@ -204,6 +219,9 @@ class LayerOrderView(QDockWidget):
         self.btn_del_group.setEnabled(enabled and n >= 1)
         self.btn_move_up.setEnabled(enabled and any_selected)
         self.btn_move_down.setEnabled(enabled and any_selected)
+        can_undo, _undo_text, can_redo, _redo_text = self._undo_state
+        self.btn_undo.setEnabled(enabled and can_undo)
+        self.btn_redo.setEnabled(enabled and can_redo)
 
     def _on_context_menu(self, pos):
         if not self.chk_control.isChecked():
@@ -307,6 +325,13 @@ class LayerOrderView(QDockWidget):
         self.chk_control.setChecked(bool(enabled))
         for w in (self.tree, self.btn_add_group, self.chk_remove_empty):
             w.setEnabled(enabled)
+        self._update_group_buttons()
+
+    def render_undo_state(self, can_undo: bool, undo_text: str, can_redo: bool, redo_text: str):
+        """Undo / Redo buttons: availability and the step they would act on."""
+        self._undo_state = (can_undo, undo_text, can_redo, redo_text)
+        self.btn_undo.setToolTip(f"Undo: {undo_text}" if can_undo and undo_text else "Undo")
+        self.btn_redo.setToolTip(f"Redo: {redo_text}" if can_redo and redo_text else "Redo")
         self._update_group_buttons()
 
     def render_remove_empty(self, checked: bool):
